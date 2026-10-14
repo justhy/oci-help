@@ -92,46 +92,53 @@
 
       <!-- 创建实例 -->
       <section id="tab-create" class="panel">
-        <div class="card">
-          <h3>从模版创建实例</h3>
-          <div class="form-grid">
-            <label>实例模版
-              <select id="templateSelect"></select>
-            </label>
-            <label>创建个数 (sum)
-              <input id="launchSum" type="number" min="1" placeholder="留空使用模版值">
-            </label>
-            <label>每个可用性域创建 (each)
-              <input id="launchEach" type="number" min="0" placeholder="留空使用模版值">
-            </label>
-            <label>重试次数 (retry，-1 为一直重试)
-              <input id="launchRetry" type="number" placeholder="留空使用模版值">
-            </label>
-            <label>OCPU 数
-              <input id="launchOcpus" type="number" step="0.5" min="0" placeholder="留空使用模版值">
-            </label>
-            <label>内存 (GB)
-              <input id="launchMemory" type="number" step="0.5" min="0" placeholder="留空使用模版值">
-            </label>
-            <label>引导卷大小 (GB)
-              <input id="launchBoot" type="number" min="0" placeholder="留空使用模版值">
-            </label>
-            <label>可用性域 (可选)
-              <input id="launchAd" type="text" placeholder="留空则自动选择">
-            </label>
-            <label>实例名称 (可选)
-              <input id="launchName" type="text" placeholder="留空自动生成">
-            </label>
-            <label class="span2">SSH 公钥 (可选，覆盖模版)
-              <input id="launchSsh" type="text" placeholder="ssh-rsa AAAA...">
-            </label>
+        <div class="create-layout">
+
+          <!-- 左：模版详情，实时显示实际生效值 -->
+          <div class="card" id="templatePreview"></div>
+
+          <!-- 右：创建参数表单 -->
+          <div class="card">
+            <h3>从模版创建实例</h3>
+            <div class="form-grid">
+              <label>实例模版
+                <select id="templateSelect"></select>
+              </label>
+              <label>创建个数 (sum)
+                <input id="launchSum" type="number" min="1" placeholder="留空使用模版值">
+              </label>
+              <label>每个可用性域创建 (each)
+                <input id="launchEach" type="number" min="0" placeholder="留空使用模版值">
+              </label>
+              <label>重试次数 (retry，-1 为一直重试)
+                <input id="launchRetry" type="number" placeholder="留空使用模版值">
+              </label>
+              <label>OCPU 数
+                <input id="launchOcpus" type="number" step="0.5" min="0" placeholder="留空使用模版值">
+              </label>
+              <label>内存 (GB)
+                <input id="launchMemory" type="number" step="0.5" min="0" placeholder="留空使用模版值">
+              </label>
+              <label>引导卷大小 (GB)
+                <input id="launchBoot" type="number" min="0" placeholder="留空使用模版值">
+              </label>
+              <label>可用性域 (可选)
+                <input id="launchAd" type="text" placeholder="留空则自动选择">
+              </label>
+              <label>实例名称 (可选)
+                <input id="launchName" type="text" placeholder="留空自动生成">
+              </label>
+              <label class="span2">SSH 公钥 (可选，覆盖模版)
+                <input id="launchSsh" type="text" placeholder="ssh-rsa AAAA...">
+              </label>
+            </div>
+            <div class="toolbar">
+              <button class="btn primary" id="launchBtn">开始创建</button>
+              <span class="hint">点击后弹窗确认创建信息，确认即提交后台任务。</span>
+            </div>
           </div>
-          <div class="toolbar">
-            <button class="btn primary" id="launchBtn">开始创建</button>
-            <span class="hint">创建为后台任务，可在「任务」页查看进度。</span>
-          </div>
+
         </div>
-        <div class="card" id="templatePreview"></div>
       </section>
 
       <!-- 任务 -->
@@ -183,6 +190,24 @@
       <div id="loginError" class="login-error hidden"></div>
       <button type="submit" class="btn primary login-btn">登 录</button>
     </form>
+  </div>
+</div>
+
+<!-- 创建实例二次确认弹窗 -->
+<div id="launchConfirm" class="modal hidden">
+  <div class="modal-box launch-confirm-box">
+    <div class="modal-head">
+      <h3>确认创建信息</h3>
+      <button class="btn ghost" id="launchCloseBtn">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="kv confirm-kv" id="launchConfirmBody"></div>
+      <div class="hint">确认无误后将以该配置创建后台任务，可在「任务」页查看进度。</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="launchCancelBtn">取消</button>
+      <button class="btn primary" id="launchOkBtn">确认创建</button>
+    </div>
   </div>
 </div>
 

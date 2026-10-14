@@ -218,27 +218,73 @@ func openBrowser(u string) {
 	go func() { _ = cmd.Wait() }()
 }
 
+// isWildcardHost 判断监听主机是否为通配地址（即未指定具体网卡）。
+func isWildcardHost(h string) bool {
+	h = strings.Trim(h, "[]")
+	return h == "" || h == "0.0.0.0" || h == "::"
+}
+
 // forceLoopback 在未启用鉴权时强制绑定到回环地址，避免实例被任意访问/操作。
 func forceLoopback(addr string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return "127.0.0.1:8080"
 	}
-	if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
+	if isWildcardHost(host) {
 		host = "127.0.0.1"
 	}
 	return net.JoinHostPort(host, port)
 }
 
+// detectLocalIP 探测本机对外通信所用的 IP，用于把访问地址展示成实际可达的地址。
+// 探测失败返回空串。
+func detectLocalIP() string {
+	// 1) UDP "连接" 一个外部地址即可拿到出口网卡 IP（UDP 无握手，不会真的发包）。
+	//    比遍历网卡更准：多虚拟网卡的机器上能选中真正的出口网卡。
+	if conn, err := net.Dial("udp", "8.8.8.8:80"); err == nil {
+		if ua, ok := conn.LocalAddr().(*net.UDPAddr); ok && ua.IP != nil {
+			ip := ua.IP
+			_ = conn.Close()
+			if !ip.IsLoopback() && !ip.IsUnspecified() {
+				if v4 := ip.To4(); v4 != nil {
+					return v4.String()
+				}
+				return ip.String()
+			}
+		} else {
+			_ = conn.Close()
+		}
+	}
+	// 2) 回退：遍历网卡，取第一个非回环、非链路本地的全局单播 IPv4
+	if addrs, err := net.InterfaceAddrs(); err == nil {
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok || ipnet.IP.IsLoopback() || ipnet.IP.IsLinkLocalUnicast() {
+				continue
+			}
+			if v4 := ipnet.IP.To4(); v4 != nil {
+				return v4.String()
+			}
+		}
+	}
+	return ""
+}
+
+// displayAddr 决定对外展示的访问地址：
+// 配置了具体网卡/域名就原样使用；配置的是通配地址时，
+// 探测本机实际 IP（如 192.168.x.x），探测不到再退回 127.0.0.1。
 func displayAddr(addr string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return addr
 	}
-	if host == "" || host == "::" || host == "0.0.0.0" {
-		host = "127.0.0.1"
+	if isWildcardHost(host) {
+		if ip := detectLocalIP(); ip != "" {
+			return net.JoinHostPort(ip, port)
+		}
+		return net.JoinHostPort("127.0.0.1", port)
 	}
-	return net.JoinHostPort(host, port)
+	return net.JoinHostPort(strings.Trim(host, "[]"), port)
 }
 
 // withAuth 仅对 /api/ 接口做鉴权。

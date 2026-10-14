@@ -387,6 +387,39 @@ td.actions { display: flex; gap: 6px; }
   transition: background .25s ease, border-color .25s ease;
 }
 .card h3 { margin: 0 0 16px; font-size: 15px; font-weight: 600; }
+/* 创建实例页：左「模版详情/实际生效值」+ 右「参数表单」
+   不设 align-items: start，让两栏卡片按 stretch 保持等高 */
+.create-layout {
+  display: grid;
+  grid-template-columns: 330px 1fr;
+  gap: 16px;
+}
+.create-layout .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.create-layout .span2 { grid-column: span 2; }
+
+/* 模版详情中的实际生效值：蓝色为用户修改，灰色附注模版原值 */
+#templatePreview { display: flex; flex-direction: column; }
+#templatePreview .kv { grid-template-columns: 104px 1fr; gap: 9px 10px; margin-bottom: 14px; }
+.kv .v { word-break: break-word; }
+.kv .v.is-changed { color: var(--primary); font-weight: 600; }
+.kv .val-default { color: var(--muted); font-weight: 400; font-size: 11.5px; margin-left: 6px; }
+.preview-note {
+  /* 卡片被拉伸时把说明推到卡片底部，避免中间留大片空白 */
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 创建确认弹窗 */
+.modal-box.launch-confirm-box { width: min(560px, 92vw); }
+.confirm-kv { grid-template-columns: 150px 1fr; margin-bottom: 14px; }
+.confirm-kv .k { color: var(--muted); }
+.confirm-kv .v { word-break: break-word; }
+.confirm-kv .v.changed { color: var(--primary); font-weight: 600; }
+
 .form-grid { display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 14px 18px; }
 .form-grid label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 12.5px; }
 .form-grid input, .form-grid select { width: 100%; }
@@ -580,6 +613,11 @@ td.actions { display: flex; gap: 6px; }
 /* ==================================================================
    响应式
    ================================================================== */
+@media (max-width: 1100px) {
+  .create-layout { grid-template-columns: 1fr; }
+  .create-layout .form-grid { grid-template-columns: repeat(3, minmax(180px, 1fr)); }
+}
+
 @media (max-width: 860px) {
   .brand-text { display: none; }
   .brand-version { display: none; }

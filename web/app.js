@@ -546,29 +546,86 @@ async function loadTemplates() {
   }
 }
 
-function renderTemplatePreview() {
+function currentTemplate() {
   const name = document.getElementById('templateSelect').value;
-  const t = state.templates.filter(function (x) { return x.name === name; })[0];
-  const box = document.getElementById('templatePreview');
-  if (!t) { box.innerHTML = ''; return; }
-  box.innerHTML = '<h3>模版详情</h3><div class="kv">' +
-    '<div class="k">名称</div><div>' + esc(t.name) + '</div>' +
-    '<div class="k">配置</div><div class="mono">' + esc(t.shape) + '</div>' +
-    '<div class="k">OCPU / 内存</div><div class="mono">' + t.ocpus + ' C / ' + t.memoryInGBs + ' GB</div>' +
-    '<div class="k">引导卷(GB)</div><div>' + t.bootVolumeSizeInGBs + '</div>' +
-    '<div class="k">创建个数 (sum)</div><div>' + t.sum + '</div>' +
-    '<div class="k">每个域创建 (each)</div><div>' + t.each + '</div>' +
-    '<div class="k">重试次数</div><div>' + t.retry + '</div>' +
-    '<div class="k">可用性域</div><div>' + (esc(t.availabilityDomain) || '自动') + '</div>' +
-    '<div class="k">操作系统</div><div>' + esc(t.operatingSystem) + ' ' + esc(t.operatingSystemVersion) + '</div>' +
-  '</div>';
+  return state.templates.filter(function (x) { return x.name === name; })[0] || null;
 }
 
-async function launch() {
-  const template = document.getElementById('templateSelect').value;
-  if (!template) { toast('请选择实例模版', 'error'); return; }
-  if (!(await uiConfirm('确定按模版「' + template + '」创建实例？任务将在后台运行。'))) return;
-  const body = { account: state.account, template: template };
+// effective 取表单实际值：留空则回退到模版默认值；changed 表示用户改过
+function effective(inputId, tplValue, isNum) {
+  const el = document.getElementById(inputId);
+  const raw = el ? el.value.trim() : '';
+  const tpl = (tplValue === undefined || tplValue === null) ? '' : tplValue;
+  if (raw === '') return { value: tpl, tpl: tpl, changed: false };
+  const v = isNum ? Number(raw) : raw;
+  if (isNum && isNaN(v)) return { value: tpl, tpl: tpl, changed: false };
+  return { value: v, tpl: tpl, changed: String(v) !== String(tpl) };
+}
+
+function fmtVal(v) {
+  if (v === '' || v === undefined || v === null) return '—';
+  return esc(String(v));
+}
+
+function valCell(e, formatter) {
+  const text = formatter ? formatter(e.value) : fmtVal(e.value);
+  const def = e.changed ? '<span class="val-default">模版 ' + fmtVal(e.tpl) + '</span>' : '';
+  return '<div class="v' + (e.changed ? ' is-changed' : '') + '">' + text + def + '</div>';
+}
+
+// 模版详情：条目与模版一致，值显示「用户实际输入 / 模版默认」，并标注被修改项
+function renderTemplatePreview() {
+  const box = document.getElementById('templatePreview');
+  const t = currentTemplate();
+  if (!t) {
+    box.innerHTML = '<h3>模版详情</h3><div class="hint">请选择实例模版</div>';
+    return;
+  }
+
+  const ocpus = effective('launchOcpus', t.ocpus, true);
+  const memory = effective('launchMemory', t.memoryInGBs, true);
+  const boot = effective('launchBoot', t.bootVolumeSizeInGBs, true);
+  const sum = effective('launchSum', t.sum, true);
+  const each = effective('launchEach', t.each, true);
+  const retry = effective('launchRetry', t.retry, true);
+  const ad = effective('launchAd', t.availabilityDomain, false);
+
+  const specChanged = ocpus.changed || memory.changed;
+  const specCell = '<div class="v mono' + (specChanged ? ' is-changed' : '') + '">' +
+    fmtVal(ocpus.value) + ' C / ' + fmtVal(memory.value) + ' GB' +
+    (specChanged
+      ? '<span class="val-default">模版 ' + fmtVal(t.ocpus) + ' C / ' + fmtVal(t.memoryInGBs) + ' GB</span>'
+      : '') +
+    '</div>';
+
+  const changedCount = [specChanged, boot.changed, sum.changed, each.changed, retry.changed, ad.changed]
+    .filter(Boolean).length;
+
+  box.innerHTML = '<h3>模版详情</h3>' +
+    '<div class="kv">' +
+      '<div class="k">名称</div><div class="v">' + esc(t.name) + '</div>' +
+      '<div class="k">配置</div><div class="v mono">' + esc(t.shape) + '</div>' +
+      '<div class="k">OCPU / 内存</div>' + specCell +
+      '<div class="k">引导卷(GB)</div>' + valCell(boot) +
+      '<div class="k">创建个数 (sum)</div>' + valCell(sum) +
+      '<div class="k">每个域创建 (each)</div>' + valCell(each) +
+      '<div class="k">重试次数</div>' + valCell(retry) +
+      '<div class="k">可用性域</div>' + valCell(ad, function (v) { return v ? esc(v) : '自动'; }) +
+      '<div class="k">操作系统</div><div class="v">' + esc(t.operatingSystem) + ' ' + esc(t.operatingSystemVersion) + '</div>' +
+    '</div>' +
+    '<div class="preview-note">' +
+      (changedCount > 0
+        ? '蓝色为你修改后的实际值（共 ' + changedCount + ' 项），灰色为模版原值。'
+        : '当前全部使用模版默认值。') +
+    '</div>';
+}
+
+// collectLaunch 汇总创建参数。
+// body 只包含用户显式填写的覆盖项（后端为指针字段，留空即沿用模版值）；
+// rows 用于弹窗展示实际生效的创建信息。
+function collectLaunch() {
+  const t = currentTemplate();
+  const body = { account: state.account, template: t.name };
   const sum = numOrNull('launchSum'); if (sum !== null) body.sum = sum;
   const each = numOrNull('launchEach'); if (each !== null) body.each = each;
   const retry = numOrNull('launchRetry'); if (retry !== null) body.retry = retry;
@@ -576,14 +633,64 @@ async function launch() {
   const memory = numOrNull('launchMemory'); if (memory !== null) body.memoryInGBs = memory;
   const boot = numOrNull('launchBoot'); if (boot !== null) body.bootVolumeSizeInGBs = boot;
   const ad = document.getElementById('launchAd').value.trim(); if (ad) body.availabilityDomain = ad;
-  const name = document.getElementById('launchName').value.trim(); if (name) body.instanceDisplayName = name;
+  const instName = document.getElementById('launchName').value.trim(); if (instName) body.instanceDisplayName = instName;
   const ssh = document.getElementById('launchSsh').value.trim(); if (ssh) body.sshPublicKey = ssh;
+
+  const eSum = effective('launchSum', t.sum, true);
+  const eEach = effective('launchEach', t.each, true);
+  const eRetry = effective('launchRetry', t.retry, true);
+  const eOcpus = effective('launchOcpus', t.ocpus, true);
+  const eMemory = effective('launchMemory', t.memoryInGBs, true);
+  const eBoot = effective('launchBoot', t.bootVolumeSizeInGBs, true);
+  const eAd = effective('launchAd', t.availabilityDomain, false);
+
+  const rows = [
+    { k: '账号', text: esc(state.account) },
+    { k: '实例模版', text: esc(t.name) + '（' + esc(t.shape) + '）' },
+    { k: '创建个数 (sum)', text: fmtVal(eSum.value), changed: eSum.changed },
+    { k: '每个可用性域创建 (each)', text: fmtVal(eEach.value), changed: eEach.changed },
+    { k: '重试次数', text: fmtVal(eRetry.value), changed: eRetry.changed },
+    { k: 'OCPU 数', text: fmtVal(eOcpus.value), changed: eOcpus.changed },
+    { k: '内存 (GB)', text: fmtVal(eMemory.value), changed: eMemory.changed },
+    { k: '引导卷大小 (GB)', text: fmtVal(eBoot.value), changed: eBoot.changed },
+    { k: '可用性域', text: eAd.value ? esc(eAd.value) : '自动选择', changed: eAd.changed },
+    { k: '实例名称', text: instName ? esc(instName) : '自动生成', changed: !!instName },
+    { k: 'SSH 公钥', text: ssh ? '已自定义（覆盖模版）' : '使用模版配置', changed: !!ssh }
+  ];
+
+  return { body: body, rows: rows };
+}
+
+// launch 只负责弹出确认框，展示实际创建信息
+function launch() {
+  const t = currentTemplate();
+  if (!t) { toast('请选择实例模版', 'error'); return; }
+  const info = collectLaunch();
+  document.getElementById('launchConfirmBody').innerHTML = info.rows.map(function (r) {
+    return '<div class="k">' + esc(r.k) + '</div>' +
+      '<div class="v' + (r.changed ? ' changed' : '') + '">' + r.text + '</div>';
+  }).join('');
+  document.getElementById('launchConfirm').classList.remove('hidden');
+}
+
+function closeLaunchConfirm() {
+  document.getElementById('launchConfirm').classList.add('hidden');
+}
+
+// doLaunch 在用户二次确认后真正提交创建任务
+async function doLaunch() {
+  const t = currentTemplate();
+  if (!t) { closeLaunchConfirm(); return; }
+  const info = collectLaunch();
+  closeLaunchConfirm();
   try {
-    const data = await api('/api/launch', { method: 'POST', body: body });
+    const data = await api('/api/launch', { method: 'POST', body: info.body });
     toast('任务已创建: ' + data.jobId, 'success');
-    switchTab('jobs');
+    // 先选中新任务再切页；switchTab 内部会加载任务列表与该任务日志，
+    // 这里不要再额外调一次 loadJobs，避免并发重复拉取日志。
     state.currentJobId = data.jobId;
-    await loadJobs();
+    state.logBuffers[data.jobId] = { lines: [], next: 0, inflight: null };
+    switchTab('jobs');
   } catch (e) {
     toast('创建失败: ' + e.message, 'error');
   }
@@ -599,7 +706,11 @@ function statusLabel(job) {
   return { running: '运行中', success: '成功', partial: '部分成功', failed: '失败', canceled: '已取消' }[job.status] || job.status;
 }
 
+let jobsLoading = false;
 async function loadJobs() {
+  // 定时轮询与手动刷新可能同时触发，加锁避免重复请求与重复渲染
+  if (jobsLoading) return;
+  jobsLoading = true;
   try {
     const data = await api('/api/jobs');
     state.jobs = (data.jobs || []).sort(function (a, b) {
@@ -609,24 +720,34 @@ async function loadJobs() {
     if (job) await fetchJobLogs(job);
     renderJobs();
   } catch (e) { /* 忽略轮询错误 */ }
+  jobsLoading = false;
 }
 
 // fetchJobLogs 只拉取 since 之后的增量日志，避免每次轮询都传输全部日志。
+// 同一任务同时只允许一个请求在途：否则并发的两个请求会读到相同的 since，
+// 各自把同一段日志追加一次，导致日志重复。
 async function fetchJobLogs(job) {
   let buf = state.logBuffers[job.id];
-  if (!buf) { buf = state.logBuffers[job.id] = { lines: [], next: 0 }; }
-  try {
-    const data = await api('/api/job?id=' + encodeURIComponent(job.id) + '&since=' + buf.next);
-    const d = data.job || {};
-    if (typeof d.logFrom === 'number' && d.logFrom > buf.next) {
-      buf.lines = [];   // 服务端已裁剪旧日志，本地缓存作废
-    }
-    if (d.logs && d.logs.length) { buf.lines = buf.lines.concat(d.logs); }
-    if (typeof d.logNext === 'number') { buf.next = d.logNext; }
-    if (buf.lines.length > 4000) { buf.lines = buf.lines.slice(buf.lines.length - 4000); }
-    buf.detail = d;
-  } catch (e) { /* 忽略轮询错误 */ }
-  return buf;
+  if (!buf) { buf = state.logBuffers[job.id] = { lines: [], next: 0, inflight: null }; }
+  if (buf.inflight) return buf.inflight;   // 复用进行中的请求
+
+  const since = buf.next;
+  buf.inflight = (async function () {
+    try {
+      const data = await api('/api/job?id=' + encodeURIComponent(job.id) + '&since=' + since);
+      const d = data.job || {};
+      if (typeof d.logFrom === 'number' && d.logFrom > buf.next) {
+        buf.lines = [];   // 服务端已裁剪旧日志，本地缓存作废
+      }
+      if (d.logs && d.logs.length) { buf.lines = buf.lines.concat(d.logs); }
+      if (typeof d.logNext === 'number') { buf.next = d.logNext; }
+      if (buf.lines.length > 4000) { buf.lines = buf.lines.slice(buf.lines.length - 4000); }
+      buf.detail = d;
+    } catch (e) { /* 忽略轮询错误 */ }
+    buf.inflight = null;
+    return buf;
+  })();
+  return buf.inflight;
 }
 
 // 删除图标（垃圾桶），用 currentColor 以便随按钮状态变色
@@ -848,6 +969,20 @@ function bindEvents() {
   document.getElementById('cancelJobBtn').addEventListener('click', cancelJob);
   document.getElementById('launchBtn').addEventListener('click', launch);
   document.getElementById('templateSelect').addEventListener('change', renderTemplatePreview);
+
+  // 创建信息二次确认弹窗
+  document.getElementById('launchOkBtn').addEventListener('click', doLaunch);
+  document.getElementById('launchCancelBtn').addEventListener('click', closeLaunchConfirm);
+  document.getElementById('launchCloseBtn').addEventListener('click', closeLaunchConfirm);
+  document.getElementById('launchConfirm').addEventListener('click', function (e) {
+    if (e.target.id === 'launchConfirm') closeLaunchConfirm();
+  });
+
+  // 表单改动时实时刷新左侧「模版详情」的实际生效值
+  ['launchSum', 'launchEach', 'launchRetry', 'launchOcpus',
+   'launchMemory', 'launchBoot', 'launchAd'].forEach(function (id) {
+    document.getElementById(id).addEventListener('input', renderTemplatePreview);
+  });
 
   document.querySelectorAll('[data-bulk]').forEach(function (b) {
     b.addEventListener('click', function () { bulkAction(b.dataset.bulk); });
