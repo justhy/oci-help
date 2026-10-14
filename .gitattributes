@@ -1,0 +1,8 @@
+# 统一按文本处理并规范为 LF，避免 CI(Linux) 上 make/脚本因 CRLF 失败
+* text=auto eol=lf
+
+# 二进制文件不做换行符转换
+*.png binary
+*.pem binary
+*.exe binary
+*.zip binary
