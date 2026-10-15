@@ -234,14 +234,9 @@ func (ac *AccountCtx) LaunchInstances(ads []identity.AvailabilityDomain, inst co
 
 		if AD_NOT_FIXED {
 			if EACH_AD {
-				// 每个可用性域创建 each 个：第 pos 个实例的目标域为第 pos/each 个域。
-				// 当前目标域可重试失败时（failTimes>0）轮转到下一个域继续尝试，
-				// 避免 retry=-1 时死循环卡在容量耗尽的域上。
-				target := pos / each
-				if failTimes > 0 {
-					target += failTimes
-				}
-				adName = ads[target%adCount].Name
+				// 每个可用性域创建 each 个：第 pos 个实例的目标域为第 pos/each 个域，
+				// 当前目标域可重试失败时（failTimes>0）轮转到下一个域继续尝试。
+				adName = ads[eachADIndex(pos, each, failTimes, adCount)].Name
 			} else {
 				if SUCCESS {
 					adIndex = 0
@@ -302,28 +297,12 @@ func (ac *AccountCtx) LaunchInstances(ads []identity.AvailabilityDomain, inst co
 
 		} else {
 			SUCCESS = false
-			errInfo := err.Error()
 			SKIP_RETRY := false
 
-			servErr, isServErr := common.IsServiceError(err)
+			notRetryable, errInfo := classifyLaunchError(err)
 
-			// 仅当确实是 OCI 服务错误时才可依据状态码判断；网络类错误（代理断连、
-			// 超时、DNS 失败等）servErr 为 nil，必须归入可重试分支，否则会 nil panic。
-			notRetryable := false
-			if isServErr {
-				code := servErr.GetHTTPStatusCode()
-				switch {
-				case code >= 400 && code <= 405:
-					notRetryable = true
-				case code == 409 && !strings.EqualFold(servErr.GetCode(), "IncorrectState"):
-					notRetryable = true
-				case code == 412, code == 413, code == 422, code == 431, code == 501:
-					notRetryable = true
-				}
-			}
 			if notRetryable {
 				// 不可重试
-				errInfo = servErr.GetMessage()
 				duration := FormatDuration(time.Since(startTime))
 				ac.logf("\033[1;31m[%s] 第 %d 个实例创建失败了❌, 错误信息: \033[0m%s\n", ac.Name, pos+1, errInfo)
 				if config.C.Each {
@@ -338,9 +317,6 @@ func (ac *AccountCtx) LaunchInstances(ads []identity.AvailabilityDomain, inst co
 
 			} else {
 				// 可重试
-				if isServErr {
-					errInfo = servErr.GetMessage()
-				}
 				ac.logf("\033[1;31m[%s] 创建失败, Error: \033[0m%s\n", ac.Name, errInfo)
 
 				SKIP_RETRY = false
@@ -417,4 +393,50 @@ func (ac *AccountCtx) LaunchInstances(ads []identity.AvailabilityDomain, inst co
 		}
 	}
 	return
+}
+
+/* ------------------------------------------------------------------ 抢机重试决策（可单测的纯逻辑） */
+
+// classifyLaunchError 判断创建实例返回的错误是否属于"不可重试"，并返回用于展示的信息。
+//
+// 关键点：只有确实是 OCI 服务错误（common.ServiceError）时才可依据 HTTP 状态码判断；
+// 网络类错误（代理断连、超时、DNS 失败等）的 IsServiceError 为 false 且 ServiceError
+// 为 nil 接口，必须归入可重试分支，否则调用 GetHTTPStatusCode 会 nil panic。
+func classifyLaunchError(err error) (notRetryable bool, msg string) {
+	if err == nil {
+		return false, ""
+	}
+	servErr, isServErr := common.IsServiceError(err)
+	if !isServErr {
+		return false, err.Error()
+	}
+	msg = servErr.GetMessage()
+	code := servErr.GetHTTPStatusCode()
+	switch {
+	case code >= 400 && code <= 405:
+		return true, msg
+	case code == 409 && !strings.EqualFold(servErr.GetCode(), "IncorrectState"):
+		return true, msg
+	case code == 412, code == 413, code == 422, code == 431, code == 501:
+		return true, msg
+	}
+	return false, msg
+}
+
+// eachADIndex 返回 each 模式下第 pos 个实例的目标可用性域下标。
+// 当前目标域可重试失败时（failTimes>0）轮转到后续域，避免 retry=-1 时死锁在容量耗尽的域上。
+// 下标始终落在 [0, adCount) 内，调用方可安全用于 ads 索引。
+func eachADIndex(pos, each, failTimes, adCount int32) int32 {
+	if adCount <= 0 || each <= 0 {
+		return 0
+	}
+	target := pos / each
+	if failTimes > 0 {
+		target += failTimes
+	}
+	idx := target % adCount
+	if idx < 0 {
+		idx += adCount
+	}
+	return idx
 }
