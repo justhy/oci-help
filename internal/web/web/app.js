@@ -40,6 +40,7 @@ const state = {
   loaded: {},          // account -> { instances: bool, volumes: bool }  缓存标记
   tasks: [],
   taskTemplates: [],
+  taskFormIsNew: true,   // 当前打开的是否为「新建抢机任务」（决定是否自动预填 SSH 公钥）
   vcns: [],
   netSub: 'security',
   subnets: [],
@@ -1092,10 +1093,31 @@ function renderTasks() {
   }).join('');
 }
 
+// accountRegion 返回指定租户（账号）配置里的 region。
+function accountRegion(tenantId) {
+  const a = state.accounts.filter(function (x) { return x.id === tenantId; })[0];
+  return a ? (a.region || '') : '';
+}
+
+// 各操作系统的默认版本（与后端 task.NormalizeOS 保持一致）
+const OS_DEFAULT_VERSION = {
+  'Canonical Ubuntu': '20.04',
+  'CentOS': '8',
+  'Oracle Linux': '8'
+};
+
+// osDefaultVersion 返回「系统版本」留空时后端会使用的默认版本。
+function osDefaultVersion(os) {
+  return OS_DEFAULT_VERSION[os] || '20.04';
+}
+
 function taskForm(task) {
   const t = task || {};
+  const isNew = !task;
+  // 新建时浏览器会默认选中第一项，区域跟随该账号
+  const curTenantId = t.tenantId || (state.accounts[0] && state.accounts[0].id) || '';
   const accounts = state.accounts.map(function (a) {
-    return '<option value="' + esc(a.id) + '"' + (t.tenantId === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>';
+    return '<option value="' + esc(a.id) + '"' + (curTenantId === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>';
   }).join('');
   const osList = ['Canonical Ubuntu', 'CentOS', 'Oracle Linux'];
   const osOpts = osList.map(function (o) {
@@ -1106,7 +1128,7 @@ function taskForm(task) {
       '<option value="">（加载中…）</option></select>' +
       '<span class="hint">模版来自 oci-help.ini 的 [INSTANCE.*] 段，选择后自动填充下方参数。</span></label>' +
     '<label>租户<select id="taskTenant">' + accounts + '</select></label>' +
-    '<label>区域 (留空用租户默认)<input id="taskRegion" value="' + esc(t.region || '') + '"></label>' +
+    '<label>区域<input id="taskRegion" value="' + esc(t.region || accountRegion(curTenantId)) + '" placeholder="留空用租户默认"></label>' +
     '<label>架构<select id="taskArch">' +
       '<option value="AMD"' + (t.architecture !== 'ARM' ? ' selected' : '') + '>AMD (免费 E2.1.Micro)</option>' +
       '<option value="ARM"' + (t.architecture === 'ARM' ? ' selected' : '') + '>ARM (A1.Flex)</option></select></label>' +
@@ -1114,14 +1136,15 @@ function taskForm(task) {
     '<label>内存 GB (ARM)<input id="taskMemory" type="number" step="0.5" value="' + (t.memory || 6) + '"></label>' +
     '<label>磁盘 GB<input id="taskDisk" type="number" value="' + (t.disk || 47) + '"></label>' +
     '<label>创建数量<input id="taskCount" type="number" value="' + (t.createNumbers || 1) + '"></label>' +
-    '<label>重试间隔最小(秒)<input id="taskRetryMin" type="number" min="0" value="' + (t.retryMin || '') + '" placeholder="留空=默认 1 秒"></label>' +
-    '<label>重试间隔最大(秒)<input id="taskRetryMax" type="number" min="0" value="' + (t.retryMax || '') + '" placeholder="留空=同最小"></label>' +
+    '<label>重试间隔最小(秒)<input id="taskRetryMin" type="number" min="0" value="' + (isNew ? 99 : (t.retryMin || '')) + '" placeholder="留空=默认 1 秒"></label>' +
+    '<label>重试间隔最大(秒)<input id="taskRetryMax" type="number" min="0" value="' + (isNew ? 150 : (t.retryMax || '')) + '" placeholder="留空=同最小"></label>' +
     '<label>操作系统<select id="taskOs">' + osOpts + '</select></label>' +
-    '<label>系统版本<input id="taskOsVer" value="' + esc(t.osVersion || '') + '" placeholder="Ubuntu 20.04 / CentOS 8"></label>' +
+    '<label>系统版本<input id="taskOsVer" value="' + esc(t.osVersion || '') + '" placeholder="留空默认 ' + esc(osDefaultVersion(t.operationSystem || 'Canonical Ubuntu')) + '"></label>' +
     '<label>实例名称<input id="taskName" value="' + esc(t.instanceName || '') + '"></label>' +
-    '<label>可用性域<input id="taskAd" value="' + esc(t.availabilityDomain || '') + '"></label>' +
-    '<label>Root 密码<input id="taskPwd" value="' + esc(t.rootPassword || '') + '" placeholder="留空随机"></label>' +
-    '<label class="span2">SSH 公钥<input id="taskSsh" value="' + esc(t.sshPublicKey || '') + '"></label>' +
+    '<label>可用性域<input id="taskAd" value="' + esc(t.availabilityDomain || '') + '" placeholder="建议留空=自动轮换所有可用性域"></label>' +
+    '<label>Root 密码<input id="taskPwd" value="' + esc(t.rootPassword || '') + '" placeholder="留空=无公钥时自动生成"></label>' +
+    '<label class="span2">SSH 公钥<input id="taskSsh" value="' + esc(t.sshPublicKey || '') + '">' +
+      '<span class="hint" id="taskSshHint"></span></label>' +
     '</div>' +
     '<div class="modal-actions">' +
       '<button class="btn" data-nact="close">取消</button>' +
@@ -1133,6 +1156,8 @@ function openTaskForm(id) {
   const t = id ? state.tasks.filter(function (x) { return x.id === id; })[0] : null;
   if (state.accounts.length === 0) { toast('请先在「设置」页添加账号', 'error'); return; }
   state.taskTemplates = [];
+  // 只有新建任务才按架构自动预填 SSH 公钥；编辑时以任务自身存的值（含"空=不用 SSH"）为准
+  state.taskFormIsNew = !t;
   openModal(t ? '编辑抢机任务' : '新建抢机任务', taskForm(t));
   bindTaskForm();
 }
@@ -1146,12 +1171,85 @@ function bindTaskForm() {
   const tenantSel = document.getElementById('taskTenant');
   if (tenantSel) {
     tenantSel.addEventListener('change', function () {
+      // 区域跟随所选账号
+      const regionEl = document.getElementById('taskRegion');
+      if (regionEl) regionEl.value = accountRegion(tenantSel.value);
       state.taskTemplates = [];
       loadTaskTemplates();
     });
   }
+  // 切换架构 → SSH 公钥跟着换成该架构在 oci-help.ini 里配的那份
+  const archSel = document.getElementById('taskArch');
+  if (archSel) archSel.addEventListener('change', function () { fillTaskSshFromIni(); });
+  // 切换操作系统 → 「系统版本」的占位提示跟着变（留空时后端用的就是它）
+  const osSel = document.getElementById('taskOs');
+  if (osSel) {
+    osSel.addEventListener('change', function () {
+      const verEl = document.getElementById('taskOsVer');
+      if (verEl) verEl.placeholder = '留空默认 ' + osDefaultVersion(osSel.value);
+    });
+  }
+  const sshEl = document.getElementById('taskSsh');
+  if (sshEl) sshEl.addEventListener('input', updateSshHint);
+  const pwdEl = document.getElementById('taskPwd');
+  if (pwdEl) pwdEl.addEventListener('input', updateSshHint);
   tmplSel.addEventListener('change', function () { applyTaskTemplate(tmplSel.value); });
   loadTaskTemplates();
+}
+
+// templateForArch 按架构挑出对应的 INI 模版段：优先按 shape 匹配，其次按段名含 AMD/ARM。
+function templateForArch(arch) {
+  const list = state.taskTemplates || [];
+  const wantArm = String(arch).toUpperCase() === 'ARM';
+  const wantShape = wantArm ? 'A1.FLEX' : 'E2.1.MICRO';
+  let byShape = null;
+  let byName = null;
+  list.forEach(function (t) {
+    const shape = String(t.shape || '').toUpperCase();
+    const name = String(t.name || '').toUpperCase();
+    if (!byShape && shape.indexOf(wantShape) >= 0) byShape = t;
+    if (byName) return;
+    if (wantArm ? name.indexOf('ARM') >= 0 : name.indexOf('AMD') >= 0) byName = t;
+  });
+  return byShape || byName || null;
+}
+
+// fillTaskSshFromIni 按当前架构把 oci-help.ini 模版里的 ssh_authorized_key 预填到表单。
+// 只在用户没动过这个框时回填（清空后即视为"本次不使用 SSH"，不再自动填回）。
+function fillTaskSshFromIni() {
+  const sshEl = document.getElementById('taskSsh');
+  if (!sshEl) return;
+  const archEl = document.getElementById('taskArch');
+  const tpl = templateForArch(archEl ? archEl.value : 'AMD');
+  const iniKey = tpl ? String(tpl.sshPublicKey || '').trim() : '';
+  const auto = sshEl.dataset.autoSsh || '';
+  if (sshEl.value === '' || sshEl.value === auto) {
+    sshEl.value = iniKey;
+    sshEl.dataset.autoSsh = iniKey;
+  }
+  updateSshHint();
+}
+
+// updateSshHint 说明当前会怎么登录（公钥 / 密码 / 自动生成密码）。
+function updateSshHint() {
+  const sshEl = document.getElementById('taskSsh');
+  const hintEl = document.getElementById('taskSshHint');
+  if (!sshEl || !hintEl) return;
+  const archEl = document.getElementById('taskArch');
+  const tpl = templateForArch(archEl ? archEl.value : 'AMD');
+  const pwdEl = document.getElementById('taskPwd');
+  const hasKey = sshEl.value.trim() !== '';
+  const hasPwd = !!(pwdEl && pwdEl.value.trim() !== '');
+  if (hasKey) {
+    const from = tpl && String(tpl.sshPublicKey || '').trim() === sshEl.value.trim()
+      ? '（已从 oci-help.ini 的 [' + tpl.name + '] 自动填入）'
+      : '';
+    hintEl.textContent = '使用 SSH 公钥登录' + from + '；清空此框则本次不使用 SSH 公钥。';
+  } else if (hasPwd) {
+    hintEl.textContent = '不使用 SSH 公钥，将用上面填写的 Root 密码登录。';
+  } else {
+    hintEl.textContent = '不使用 SSH 公钥、也未填 Root 密码 → 保存时会自动生成随机 root 密码。';
+  }
 }
 
 // loadTaskTemplates 按当前租户读取 oci-help.ini 中的实例模版列表。
@@ -1170,16 +1268,21 @@ async function loadTaskTemplates() {
   } catch (e) {
     state.taskTemplates = [];
     sel.innerHTML = '<option value="">（读取模版失败：' + esc(e.message) + '）</option>';
+    updateSshHint();
     return;
   }
   if (!state.taskTemplates.length) {
     sel.innerHTML = '<option value="">（该账号无实例模版）</option>';
+    updateSshHint();
     return;
   }
   sel.innerHTML = '<option value="">（不导入，手动填写）</option>' +
     state.taskTemplates.map(function (t) {
       return '<option value="' + esc(t.name) + '">' + esc(t.name) + '</option>';
     }).join('');
+  // 模版到手后再按架构预填 SSH 公钥（仅新建任务；编辑时以任务自身的值为准）
+  if (state.taskFormIsNew) fillTaskSshFromIni();
+  else updateSshHint();
 }
 
 // applyTaskTemplate 把模版参数填充到表单（不覆盖模版未提供的项）。
@@ -1200,6 +1303,13 @@ function applyTaskTemplate(name) {
   if (tpl.availabilityDomain) setInput('taskAd', tpl.availabilityDomain);
   if (tpl.operatingSystem) setSelectValue('taskOs', tpl.operatingSystem);
   if (tpl.operatingSystemVersion) setInput('taskOsVer', tpl.operatingSystemVersion);
+  // 模版里的 SSH 公钥一并导入（记为"自动填"，切架构时仍可被替换）
+  const sshEl = document.getElementById('taskSsh');
+  if (sshEl && tpl.sshPublicKey) {
+    sshEl.value = String(tpl.sshPublicKey).trim();
+    sshEl.dataset.autoSsh = sshEl.value;
+  }
+  updateSshHint();
   toast('已导入模版「' + name + '」', 'success');
 }
 
@@ -1243,10 +1353,18 @@ async function saveTask(id) {
     sshPublicKey: document.getElementById('taskSsh').value.trim()
   };
   try {
-    await api('/api/task/save', { method: 'POST', body: body });
+    const data = await api('/api/task/save', { method: 'POST', body: body });
     closeModal();
-    toast('抢机任务已保存并开始执行', 'success');
     await loadTasks();
+    if (data && data.generatedRootPassword && data.task && data.task.rootPassword) {
+      // 自动生成的密码必须让用户看到，否则等于没设
+      openModal('已自动生成 Root 密码', '<div class="kv">' +
+        '<div class="k">Root 密码</div><div class="mono">' + esc(data.task.rootPassword) + '</div>' +
+        '</div><div class="hint">未填写 SSH 公钥、也未填 Root 密码，已自动生成该密码：' +
+        '抢到实例后会随通知（Telegram）一起发送，也可在任务列表点「编辑」查看。</div>');
+    } else {
+      toast('抢机任务已保存并开始执行', 'success');
+    }
   } catch (e) {
     toast('保存失败: ' + e.message, 'error');
   }

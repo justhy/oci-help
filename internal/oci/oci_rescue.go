@@ -45,7 +45,7 @@ func (ac *AccountCtx) AutoRescue(instanceID string, opts RescueOptions) error {
 		opts.OSVersion = "20.04"
 	}
 	if opts.RootPassword == "" {
-		opts.RootPassword = randomPassword(12)
+		opts.RootPassword = RandomPassword(12)
 	}
 
 	instance, err := ac.GetInstance(&instanceID)
@@ -355,7 +355,8 @@ func RootPasswordCloudInit(password string) string {
 		"    root:" + password + "\n"
 }
 
-func randomPassword(n int) string {
+// RandomPassword 生成 n 位随机密码（去掉了易混淆的 0/O/1/l/I 等字符）。
+func RandomPassword(n int) string {
 	const chars = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 	b := make([]byte, n)
 	for i := range b {

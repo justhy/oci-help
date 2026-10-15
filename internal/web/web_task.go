@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"oci-help/internal/oci"
 	"oci-help/internal/store"
 	"oci-help/internal/task"
 	"strings"
@@ -53,6 +54,16 @@ func handleTaskSave(w http.ResponseWriter, r *http.Request) {
 	if req.Disk <= 0 {
 		req.Disk = 47
 	}
+	// 既没配 SSH 公钥、也没填 Root 密码 → 自动生成一个随机 root 密码，
+	// 保证抢到的机器一定能登录。（SSH 公钥由前端按架构从 oci-help.ini 预填；
+	// 用户把它清空即表示本次不使用 SSH。）
+	sshKey := strings.TrimSpace(req.SSHPublicKey)
+	rootPwd := req.RootPassword
+	generatedPwd := false
+	if sshKey == "" && rootPwd == "" {
+		rootPwd = oci.RandomPassword(12)
+		generatedPwd = true
+	}
 	if strings.TrimSpace(req.Architecture) == "" {
 		req.Architecture = "AMD"
 	}
@@ -67,10 +78,10 @@ func handleTaskSave(w http.ResponseWriter, r *http.Request) {
 		RetryMin:           req.RetryMin,
 		RetryMax:           req.RetryMax,
 		CreateNumbers:      req.CreateNumbers,
-		RootPassword:       req.RootPassword,
+		RootPassword:       rootPwd,
 		OperationSystem:    req.OperationSystem,
 		OSVersion:          req.OSVersion,
-		SSHPublicKey:       req.SSHPublicKey,
+		SSHPublicKey:       sshKey,
 		InstanceName:       req.InstanceName,
 		AvailabilityDomain: req.AvailabilityDomain,
 	}
@@ -84,7 +95,7 @@ func handleTaskSave(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "保存任务失败: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"task": saved})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"task": saved, "generatedRootPassword": generatedPwd})
 }
 
 func handleTaskPause(w http.ResponseWriter, r *http.Request) {

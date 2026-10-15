@@ -120,14 +120,12 @@ func (ac *AccountCtx) LaunchInstances(ads []identity.AvailabilityDomain, inst co
 	if name == "" {
 		name = time.Now().Format("instance-20060102-1504")
 	}
-	displayName := common.String(name)
-	if sum > 1 {
-		displayName = common.String(name + "-1")
-	}
+	// 一次性把本批要用的显示名全部生成好，循环里按下标取用。
+	// 这样调用方不需要自己推算"下一台叫什么"，从结构上避免序号错位/重名。
+	names := instanceNames(name, sum)
 
 	request := core.LaunchInstanceRequest{}
 	request.CompartmentId = common.String(ac.Oracle.Tenancy)
-	request.DisplayName = displayName
 
 	ac.logf("正在获取系统镜像...\n")
 	image, err := ac.GetImage(inst)
@@ -185,8 +183,12 @@ func (ac *AccountCtx) LaunchInstances(ads []identity.AvailabilityDomain, inst co
 	request.SourceDetails = sd
 	request.IsPvEncryptionInTransitEnabled = common.Bool(true)
 
+	// 只在真正有值时才写 metadata：空串的 ssh_authorized_keys 没有意义
+	//（此时应靠 Root 密码登录，见 cloud-init）。
 	metaData := map[string]string{}
-	metaData["ssh_authorized_keys"] = inst.SSH_Public_Key
+	if inst.SSH_Public_Key != "" {
+		metaData["ssh_authorized_keys"] = inst.SSH_Public_Key
+	}
 	if inst.CloudInit != "" {
 		metaData["user_data"] = inst.CloudInit
 	}
@@ -257,6 +259,8 @@ func (ac *AccountCtx) LaunchInstances(ads []identity.AvailabilityDomain, inst co
 		runTimes++
 		ac.logf("\033[1;36m[%s] 正在尝试创建第 %d 个实例, AD: %s\033[0m\n", ac.Name, pos+1, S(adName))
 		ac.logf("\033[1;36m[%s] 当前尝试次数: %d \033[0m\n", ac.Name, runTimes)
+		// 显示名按下标取，不依赖"上一轮把下一台的名字设好"
+		request.DisplayName = common.String(names[pos])
 		request.AvailabilityDomain = adName
 		createResp, err := ac.computeClient.LaunchInstance(Ctx, request)
 
@@ -273,6 +277,7 @@ func (ac *AccountCtx) LaunchInstances(ads []identity.AvailabilityDomain, inst co
 			var text string
 			if config.C.Each {
 				text = fmt.Sprintf("第 %d 个实例抢到了🎉, 正在启动中请稍等...⌛️\n账号: %s\n区域: %s\n实例名称: %s\n公共IP: 获取中...⏳\n可用性域:%s\n实例配置: %s\nOCPU计数: %g\n内存(GB): %g\n引导卷(GB): %g\n创建个数: %d\n尝试次数: %d\n耗时: %s", pos+1, ac.Name, ac.Oracle.Region, S(createResp.Instance.DisplayName), S(createResp.Instance.AvailabilityDomain), shapeName, shapeOcpusVal, shapeMemoryVal, bootVolumeSize, sum, runTimes, duration)
+				text += loginHint(inst)
 				msg, msgErr = notify.SendMessage("", text)
 			}
 			var strIps string
@@ -284,6 +289,7 @@ func (ac *AccountCtx) LaunchInstances(ads []identity.AvailabilityDomain, inst co
 				strIps = strings.Join(ips, ",")
 				ac.logf("\033[1;32m[%s] 第 %d 个实例抢到了🎉, 启动成功✅. 实例名称: %s, 公共IP: %s\033[0m\n", ac.Name, pos+1, S(createResp.Instance.DisplayName), strIps)
 				text = fmt.Sprintf("第 %d 个实例抢到了🎉, 启动成功✅\n账号: %s\n区域: %s\n实例名称: %s\n公共IP: %s\n可用性域:%s\n实例配置: %s\nOCPU计数: %g\n内存(GB): %g\n引导卷(GB): %g\n创建个数: %d\n尝试次数: %d\n耗时: %s", pos+1, ac.Name, ac.Oracle.Region, S(createResp.Instance.DisplayName), strIps, S(createResp.Instance.AvailabilityDomain), shapeName, shapeOcpusVal, shapeMemoryVal, bootVolumeSize, sum, runTimes, duration)
+				text += loginHint(inst)
 			}
 			if config.C.Each {
 				if msgErr != nil {
@@ -297,9 +303,6 @@ func (ac *AccountCtx) LaunchInstances(ads []identity.AvailabilityDomain, inst co
 				ac.logf("\033[1;33m[%s] 任务已被中止，停止创建\033[0m\n", ac.Name)
 				return
 			}
-
-			displayName = common.String(fmt.Sprintf("%s-%d", name, pos+1))
-			request.DisplayName = displayName
 
 		} else {
 			SUCCESS = false
@@ -522,4 +525,31 @@ func applyBackoff(base int32, streak int32) int32 {
 		d = maxRetryBackoffSeconds
 	}
 	return int32(d)
+}
+
+// loginHint 返回通知里附带的登录方式：设置了 root 密码时把密码一并发出，
+// 保证抢到实例后一定有办法登录（没设密码则只发公钥登录方式，即不附加）。
+func loginHint(inst config.Instance) string {
+	if inst.RootPassword == "" {
+		return ""
+	}
+	return fmt.Sprintf("\n登录: root / %s", inst.RootPassword)
+}
+
+// instanceNames 生成 sum 个实例显示名：
+// 只创建一台时不加后缀；多台时为 base-1、base-2、…、base-sum。
+// 一次性生成好、由调用方按下标取用，避免"每轮自己推下一台序号"造成错位或重名。
+func instanceNames(base string, sum int32) []string {
+	if sum <= 0 {
+		return nil
+	}
+	names := make([]string, 0, sum)
+	for i := int32(1); i <= sum; i++ {
+		if sum <= 1 {
+			names = append(names, base)
+			continue
+		}
+		names = append(names, fmt.Sprintf("%s-%d", base, i))
+	}
+	return names
 }

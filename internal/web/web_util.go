@@ -93,4 +93,6 @@ type templateView struct {
 	AvailabilityDomain     string  `json:"availabilityDomain"`
 	OperatingSystem        string  `json:"operatingSystem"`
 	OperatingSystemVersion string  `json:"operatingSystemVersion"`
+	// SSHPublicKey 来自模版的 ssh_authorized_key，供抢机任务表单按架构自动填入。
+	SSHPublicKey string `json:"sshPublicKey"`
 }

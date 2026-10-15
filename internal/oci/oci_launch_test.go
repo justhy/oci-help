@@ -226,3 +226,37 @@ func TestIsRateLimitError(t *testing.T) {
 		})
 	}
 }
+
+// TestInstanceNames 回归：多台创建时显示名必须连续、不重名。
+// 原实现靠"每台成功后设置下一台的名字"推进，循环里写成 pos+1 会让第 1、2 台都叫 name-1。
+// 现在改为一次性生成整份名字列表，本用例直接锁住这份序列。
+func TestInstanceNames(t *testing.T) {
+	cases := []struct {
+		sum  int32
+		want []string
+	}{
+		{1, []string{"x"}},          // 只创建一台：不加后缀
+		{2, []string{"x-1", "x-2"}}, // 曾经这里会得到 x-1, x-1
+		{3, []string{"x-1", "x-2", "x-3"}},
+		{5, []string{"x-1", "x-2", "x-3", "x-4", "x-5"}},
+	}
+	for _, c := range cases {
+		got := instanceNames("x", c.sum)
+		if len(got) != len(c.want) {
+			t.Fatalf("sum=%d 名字数量 = %d, want %d（%v）", c.sum, len(got), len(c.want), got)
+		}
+		seen := map[string]bool{}
+		for i := range c.want {
+			if got[i] != c.want[i] {
+				t.Fatalf("sum=%d 第 %d 个名字 = %q, want %q（全部 %v）", c.sum, i+1, got[i], c.want[i], got)
+			}
+			if seen[got[i]] {
+				t.Fatalf("sum=%d 实例名重复: %q（%v）", c.sum, got[i], got)
+			}
+			seen[got[i]] = true
+		}
+	}
+	if got := instanceNames("x", 0); got != nil {
+		t.Fatalf("sum<=0 应返回 nil, got %v", got)
+	}
+}

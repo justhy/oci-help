@@ -64,6 +64,10 @@ func (tm *TaskManager) load(t store.CreateTask) {
 
 	jb.Log("【抢机任务】已加载: 账号=%s 区域=%s 架构=%s 规格=%gC/%gG 磁盘=%dGB 数量=%d 重试间隔=%s",
 		t.TenantName, t.Region, t.Architecture, t.Ocpus, t.Memory, t.Disk, t.CreateNumbers, retryRangeText(t.RetryMin, t.RetryMax))
+	if t.RootPassword != "" {
+		// 抢到实例后的通知里也会带上，这里在任务日志里再留一份，便于回看
+		jb.Log("【抢机任务】本次 root 密码: %s", t.RootPassword)
+	}
 	if t.CreateNumbers <= 0 {
 		jb.Log("【抢机任务】创建数量为 0，任务已完成")
 		jb.FinishWith("success", "任务已完成（创建数量为 0）")
@@ -339,6 +343,7 @@ func TaskToInstance(t store.CreateTask, remaining int) config.Instance {
 		AvailabilityDomain:     t.AvailabilityDomain,
 		InstanceDisplayName:    t.InstanceName,
 		SSH_Public_Key:         t.SSHPublicKey,
+		RootPassword:           t.RootPassword,
 		// 成功后的连创间隔固定 1 秒；失败重试间隔由任务的 retryMin/retryMax 决定
 		// （未配置时回退到 MinTime/MaxTime，即 1 秒）。
 		MinTime:      1,

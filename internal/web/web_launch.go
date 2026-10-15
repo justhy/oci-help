@@ -46,6 +46,7 @@ func handleTemplates(w http.ResponseWriter, r *http.Request) {
 			AvailabilityDomain:     inst.AvailabilityDomain,
 			OperatingSystem:        inst.OperatingSystem,
 			OperatingSystemVersion: inst.OperatingSystemVersion,
+			SSHPublicKey:           inst.SSH_Public_Key,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"templates": out})

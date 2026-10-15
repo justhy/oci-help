@@ -50,8 +50,11 @@ type Instance struct {
 	Each                   int32   `ini:"each"`
 	Retry                  int32   `ini:"retry"`
 	CloudInit              string  `ini:"cloud-init"`
-	MinTime                int32   `ini:"minTime"`
-	MaxTime                int32   `ini:"maxTime"`
+	// RootPassword 是本次创建要设置的 root 密码（空 = 不设置密码，只靠 SSH 公钥登录）。
+	// 抢机任务用它生成 cloud-init，并在抢到实例的通知里一并发送。
+	RootPassword string `ini:"rootPassword"`
+	MinTime      int32  `ini:"minTime"`
+	MaxTime      int32  `ini:"maxTime"`
 	// RetryMinTime / RetryMaxTime 是失败重试的等待区间（秒），随机取值；
 	// <=0 时回退到 MinTime/MaxTime。仅作用于失败重试，不影响成功后的连创间隔。
 	RetryMinTime int32 `ini:"retryMinTime"`

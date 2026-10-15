@@ -269,7 +269,7 @@ func (ac *AccountCtx) ResetUserPassword(userID string) (string, error) {
 		return "", fmt.Errorf("在 Identity Domain 中未找到用户: %s", userID)
 	}
 	scimID := *lr.Users.Resources[0].Id
-	pw := randomPassword(14)
+	pw := RandomPassword(14)
 	_, perr := dc.PutUserPasswordChanger(Ctx, identitydomains.PutUserPasswordChangerRequest{
 		UserPasswordChangerId: &scimID,
 		UserPasswordChanger: identitydomains.UserPasswordChanger{
