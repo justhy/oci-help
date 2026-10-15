@@ -424,6 +424,7 @@ td.actions { display: flex; gap: 6px; }
 .form-grid label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 12.5px; }
 .form-grid input, .form-grid select { width: 100%; }
 .span2 { grid-column: span 2; }
+.form-grid .span3 { grid-column: 1 / -1; }
 
 /* ==================================================================
    任务页
@@ -631,3 +632,46 @@ td.actions { display: flex; gap: 6px; }
   .span2 { grid-column: span 1; }
   .jobs-layout { grid-template-columns: 1fr; }
 }
+
+/* ==================================================================
+   新增页面：抢机任务 / 网络 / 流量 / 配额 / 租户 / 设置
+   ================================================================== */
+#tab-network .card { margin-bottom: 16px; }
+#tab-network .card h3 { font-size: 14px; }
+.col-check { width: 34px; text-align: center; }
+.form-grid textarea {
+  width: 100%;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  resize: vertical;
+}
+.traffic-chart { min-height: 220px; }
+.traffic-svg { width: 100%; height: 220px; display: block; background: var(--bg-elev); border-radius: 10px; }
+.traffic-legend { display: flex; gap: 16px; align-items: center; margin-top: 10px; font-size: 12.5px; }
+.traffic-legend .lg-in { color: var(--primary); }
+.traffic-legend .lg-out { color: var(--danger); }
+#tab-tenant .card { margin-bottom: 16px; }
+#tab-tenant .card .toolbar { margin-bottom: 12px; }
+
+/* 网络页子导航与子面板 */
+.subnav { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+.subnav-btn {
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.subnav-btn:hover { color: var(--text); border-color: var(--primary); }
+.subnav-btn.active { background: var(--primary-soft); color: var(--primary); border-color: var(--primary); }
+.net-sub { display: none; }
+.net-sub.active { display: block; animation: fadeIn .2s ease; }
+.form-grid select[multiple] { min-height: 84px; }

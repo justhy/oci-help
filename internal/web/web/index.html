@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>甲骨文实例管理</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="layout">
+
+  <!-- 顶栏 -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="brand">
+        <span class="brand-icon">☁️</span>
+        <span class="brand-meta">
+          <span class="brand-text">甲骨文实例管理</span>
+          <span class="brand-version" id="appVersion"></span>
+        </span>
+      </div>
+      <div class="account-picker">
+        <span class="picker-label">账号</span>
+        <select id="accountSelect"></select>
+        <button id="refreshBtn" class="btn ghost" title="刷新当前页">⟳ 刷新</button>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <button id="themeBtn" class="btn ghost" title="切换深/浅主题">🌓</button>
+    </div>
+  </header>
+
+  <!-- 主体：侧边导航 + 主内容 -->
+  <div class="body-wrap">
+
+    <aside class="sidebar">
+      <nav class="tabs">
+        <button class="tab active" data-tab="instances">
+          <span class="tab-icon">🖥️</span><span class="tab-label">实例</span>
+        </button>
+        <button class="tab" data-tab="volumes">
+          <span class="tab-icon">💾</span><span class="tab-label">引导卷</span>
+        </button>
+        <button class="tab" data-tab="tasks">
+          <span class="tab-icon">🎯</span><span class="tab-label">抢机任务</span>
+          <span id="jobBadge" class="badge hidden">0</span>
+        </button>
+        <button class="tab" data-tab="network">
+          <span class="tab-icon">🌐</span><span class="tab-label">网络</span>
+        </button>
+        <button class="tab" data-tab="traffic">
+          <span class="tab-icon">📈</span><span class="tab-label">流量</span>
+        </button>
+        <button class="tab" data-tab="limits">
+          <span class="tab-icon">📊</span><span class="tab-label">配额</span>
+        </button>
+        <button class="tab" data-tab="tenant">
+          <span class="tab-icon">🏢</span><span class="tab-label">租户</span>
+        </button>
+        <button class="tab" data-tab="settings">
+          <span class="tab-icon">⚙️</span><span class="tab-label">设置</span>
+        </button>
+      </nav>
+    </aside>
+
+    <main>
+      <!-- 实例 -->
+      <section id="tab-instances" class="panel active">
+        <div class="toolbar">
+          <button class="btn" data-bulk="start">启动全部</button>
+          <button class="btn" data-bulk="stop">停止全部</button>
+          <button class="btn" data-bulk="restart">重启全部</button>
+          <button class="btn danger" data-bulk="terminate">终止全部</button>
+          <button class="btn ghost" id="exportIpsBtn">导出公共IP</button>
+          <span id="instancesHint" class="hint"></span>
+        </div>
+        <div class="table-wrap">
+          <table id="instancesTable">
+            <thead>
+              <tr><th>名称</th><th>状态</th><th>配置</th><th>公共IP</th><th class="col-actions">操作</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 引导卷 -->
+      <section id="tab-volumes" class="panel">
+        <div class="toolbar">
+          <button class="btn ghost" id="reloadVolumesBtn">刷新引导卷</button>
+          <span id="volumesHint" class="hint"></span>
+        </div>
+        <div class="table-wrap">
+          <table id="volumesTable">
+            <thead>
+              <tr><th>名称</th><th>状态</th><th>大小(GB)</th><th>性能(VPU)</th><th>可用性域</th><th class="col-actions">操作</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 抢机任务 -->
+      <section id="tab-tasks" class="panel">
+        <div class="toolbar">
+          <button class="btn primary" id="newTaskBtn">新建抢机任务</button>
+          <button class="btn ghost" id="reloadTasksBtn">刷新</button>
+          <span class="hint">任务保存在本地数据库，服务重启后会继续执行（断点续抢）。</span>
+        </div>
+        <div class="table-wrap">
+          <table id="tasksTable">
+            <thead>
+              <tr><th>账号</th><th>区域</th><th>架构</th><th>规格</th><th>磁盘(GB)</th><th>剩余/总数</th><th>间隔(s)</th><th>状态</th><th class="col-actions">操作</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div class="card" id="jobLogCard">
+          <div class="toolbar">
+            <h3 style="margin:0">任务日志</h3>
+            <span class="picker-label">分类</span>
+            <select id="jobFilter" class="job-filter">
+              <option value="">全部</option>
+              <option value="task">抢机任务</option>
+              <option value="action">操作类（IPv6 / 500M / 救援 / 网络）</option>
+            </select>
+            <select id="jobDeleteStatus" class="job-filter">
+              <option value="">已结束（全部）</option>
+              <option value="success">成功</option>
+              <option value="partial">部分成功</option>
+              <option value="failed">失败</option>
+              <option value="canceled">已取消</option>
+            </select>
+            <button class="btn danger" id="deleteJobsBtn">删除日志</button>
+            <button class="btn ghost" id="reloadJobsBtn">刷新</button>
+            <button class="btn danger" id="cancelJobBtn" disabled>停止任务</button>
+          </div>
+          <div class="hint" style="margin-bottom:10px">运行中的任务会自动刷新；「删除日志」按上方分类与状态筛选，运行中的任务始终保留，且不影响已创建的实例。</div>
+          <div class="jobs-layout">
+            <div class="jobs-list" id="jobsList"></div>
+            <div class="job-detail">
+              <div id="jobDetailHeader" class="hint">选择左侧任务查看详情</div>
+              <div class="progress"><div id="jobProgressBar" class="progress-bar"></div></div>
+              <pre id="jobLogs" class="logs"></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 网络 -->
+      <section id="tab-network" class="panel">
+        <div class="toolbar">
+          <span class="picker-label">VCN</span>
+          <select id="vcnSelect"></select>
+          <button class="btn ghost" id="reloadVcnsBtn">刷新</button>
+          <span id="networkHint" class="hint"></span>
+        </div>
+        <div class="subnav">
+          <button class="subnav-btn active" data-net="security">安全列表</button>
+          <button class="subnav-btn" data-net="subnet">子网</button>
+          <button class="subnav-btn" data-net="nsg">网络安全组</button>
+          <button class="subnav-btn" data-net="vnic">VNIC</button>
+        </div>
+
+        <!-- 安全列表 -->
+        <div class="net-sub active" id="net-security">
+          <div class="toolbar">
+            <button class="btn danger" id="releasePortsBtn">一键放行所有端口</button>
+          </div>
+          <div class="card">
+            <h3>入站规则 (Ingress)</h3>
+            <div class="table-wrap">
+              <table id="ingressTable">
+                <thead><tr><th class="col-check"></th><th>协议</th><th>来源</th><th>端口</th><th>描述</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card">
+            <h3>出站规则 (Egress)</h3>
+            <div class="table-wrap">
+              <table id="egressTable">
+                <thead><tr><th class="col-check"></th><th>协议</th><th>目标</th><th>端口</th><th>描述</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="toolbar">
+            <button class="btn" id="removeRulesBtn">删除勾选规则</button>
+            <button class="btn primary" id="addRuleBtn">新增规则</button>
+          </div>
+        </div>
+
+        <!-- 子网 -->
+        <div class="net-sub" id="net-subnet">
+          <div class="toolbar">
+            <button class="btn primary" id="newSubnetBtn">新建子网</button>
+            <button class="btn ghost" id="reloadSubnetsBtn">刷新</button>
+            <span class="hint">删除子网前请确保其中已无 VNIC 等资源。</span>
+          </div>
+          <div class="table-wrap">
+            <table id="subnetsTable">
+              <thead><tr><th>名称</th><th>CIDR</th><th>IPv6</th><th>状态</th><th>可用性域</th><th>禁止公网入站</th><th class="col-actions">操作</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 网络安全组 -->
+        <div class="net-sub" id="net-nsg">
+          <div class="toolbar">
+            <span class="picker-label">NSG</span>
+            <select id="nsgSelect"></select>
+            <button class="btn primary" id="newNsgBtn">新建 NSG</button>
+            <button class="btn danger" id="deleteNsgBtn">删除 NSG</button>
+            <button class="btn ghost" id="reloadNsgsBtn">刷新</button>
+          </div>
+          <div class="card">
+            <h3>规则</h3>
+            <div class="table-wrap">
+              <table id="nsgRulesTable">
+                <thead><tr><th class="col-check"></th><th>方向</th><th>协议</th><th>源/目标</th><th>端口</th><th>描述</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div class="toolbar">
+              <button class="btn" id="removeNsgRulesBtn">删除勾选规则</button>
+              <button class="btn primary" id="addNsgRuleBtn">新增规则</button>
+            </div>
+          </div>
+          <div class="card">
+            <h3>已绑定的 VNIC</h3>
+            <div id="nsgVnics" class="hint">—</div>
+          </div>
+        </div>
+
+        <!-- VNIC -->
+        <div class="net-sub" id="net-vnic">
+          <div class="toolbar">
+            <span class="picker-label">实例</span>
+            <select id="vnicInstance"></select>
+            <button class="btn primary" id="attachVnicBtn">附加辅助 VNIC</button>
+            <button class="btn ghost" id="reloadVnicsBtn">刷新</button>
+            <span class="hint">主 VNIC 不可分离；分离辅助 VNIC 会一并删除其公网 IP 关联。</span>
+          </div>
+          <div class="table-wrap">
+            <table id="vnicsTable">
+              <thead><tr><th>名称</th><th>类型</th><th>私网IP</th><th>公网IP</th><th>MAC</th><th>NSG 数</th><th class="col-actions">操作</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="card">
+            <h3>私有 IP</h3>
+            <div id="privateIpsBox" class="hint">点击上方 VNIC 的「私有 IP」查看</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 流量 -->
+      <section id="tab-traffic" class="panel">
+        <div class="toolbar">
+          <span class="picker-label">实例</span>
+          <select id="trafficInstance"></select>
+          <span class="picker-label">VNIC</span>
+          <select id="trafficVnic"></select>
+          <span class="picker-label">时间范围</span>
+          <select id="trafficRange">
+            <option value="30">最近 30 分钟</option>
+            <option value="60" selected>最近 1 小时</option>
+            <option value="180">最近 3 小时</option>
+            <option value="720">最近 12 小时</option>
+            <option value="1440">最近 24 小时</option>
+          </select>
+          <button class="btn ghost" id="reloadTrafficBtn">刷新</button>
+        </div>
+        <div class="card">
+          <div class="kv" id="trafficSummary"></div>
+          <div id="trafficChart" class="traffic-chart"></div>
+        </div>
+      </section>
+
+      <!-- 配额 -->
+      <section id="tab-limits" class="panel">
+        <div class="toolbar">
+          <span class="picker-label">服务</span>
+          <select id="limitService"></select>
+          <button class="btn ghost" id="reloadLimitsBtn">刷新</button>
+          <span id="limitsHint" class="hint"></span>
+        </div>
+        <div class="table-wrap">
+          <table id="limitsTable">
+            <thead><tr><th>服务</th><th>限制项</th><th>范围</th><th>可用性域</th><th>限额</th><th>已用</th><th>可用</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 租户 -->
+      <section id="tab-tenant" class="panel">
+        <div class="card">
+          <div class="toolbar">
+            <h3 style="margin:0">租户信息</h3>
+            <button class="btn ghost" id="reloadTenantInfoBtn">刷新</button>
+          </div>
+          <div class="kv" id="tenantInfoBox"></div>
+          <div class="table-wrap">
+            <table id="tenantUsersTable">
+              <thead><tr><th>用户</th><th>邮箱</th><th>状态</th><th>MFA</th><th>创建时间</th><th class="col-actions">操作</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- 设置 -->
+      <section id="tab-settings" class="panel">
+        <div class="card">
+          <div class="toolbar">
+            <h3 style="margin:0">账号配置</h3>
+            <button class="btn primary" id="newTenantBtn">新增账号</button>
+            <button class="btn ghost" id="reloadTenantCfgBtn">刷新</button>
+          </div>
+          <div class="table-wrap">
+            <table id="tenantCfgTable">
+              <thead><tr><th>名称</th><th>区域</th><th>Tenancy</th><th>User</th><th class="col-actions">操作</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <h3>版本与更新</h3>
+          <div class="kv" id="settingsVersion"></div>
+          <div class="toolbar">
+            <button class="btn ghost" id="checkUpdateBtn">检查更新</button>
+            <button class="btn primary" id="applyUpdateBtn" disabled>一键更新并重启</button>
+            <span class="hint">更新会从 GitHub Release 下载当前平台二进制并替换自身后重启进程。</span>
+          </div>
+        </div>
+      </section>
+    </main>
+
+  </div><!-- /.body-wrap -->
+</div><!-- /.layout -->
+
+<!-- 登录弹窗 -->
+<div id="loginModal" class="modal hidden">
+  <div class="modal-box login-box">
+    <div class="login-head">
+      <div class="login-logo">☁️</div>
+      <h3 class="login-title">甲骨文实例管理</h3>
+      <div class="login-subtitle">请登录以继续访问</div>
+    </div>
+    <form class="login-form" id="loginForm">
+      <label class="login-field">
+        <span class="login-label">用户名</span>
+        <input id="loginUser" type="text" autocomplete="username" required>
+      </label>
+      <label class="login-field">
+        <span class="login-label">密码</span>
+        <input id="loginPass" type="password" autocomplete="current-password" required>
+      </label>
+      <div id="loginError" class="login-error hidden"></div>
+      <button type="submit" class="btn primary login-btn">登 录</button>
+    </form>
+  </div>
+</div>
+
+<!-- 通用确认 / 输入对话框（替换浏览器原生 confirm/prompt） -->
+<div id="dialogModal" class="modal hidden">
+  <div class="modal-box dialog-box">
+    <div class="modal-head"><h3 id="dialogTitle">确认</h3></div>
+    <div class="modal-body">
+      <div id="dialogMessage" class="dialog-message"></div>
+      <input id="dialogInput" class="dialog-input hidden" type="text">
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="dialogCancel">取消</button>
+      <button class="btn primary" id="dialogOk">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- 实例详情弹窗 -->
+<div id="modal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3 id="modalTitle">实例详情</h3>
+      <button class="btn ghost" id="modalClose">✕</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>

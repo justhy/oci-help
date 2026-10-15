@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package applog
 
 import (
 	"syscall"
@@ -13,10 +13,10 @@ var (
 	procGetConsoleWindow      = kernel32.NewProc("GetConsoleWindow")
 )
 
-// isDoubleClickLaunch 判断当前进程是否由资源管理器双击启动。
+// IsDoubleClickLaunch 判断当前进程是否由资源管理器双击启动。
 // 判据：进程拥有控制台窗口，且该控制台只挂着本进程。
 // 从已有终端启动时控制台里还有 shell 进程，重定向/服务方式运行时没有控制台窗口。
-func isDoubleClickLaunch() bool {
+func IsDoubleClickLaunch() bool {
 	if hwnd, _, _ := procGetConsoleWindow.Call(); hwnd == 0 {
 		return false
 	}

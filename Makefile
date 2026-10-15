@@ -3,10 +3,15 @@ VERSION := $(shell git describe --tags || echo "unknown-version")
 COMMIT := $(shell git rev-parse HEAD)
 BUILDTIME := $(shell date -u "+%Y-%m-%d %H:%M:%S %Z")
 BUILD_DIR := build
-# 构建信息注入 main 包（模块名为 oci-help，包为 main）
-VAR_SETTING := -X "main.Version=$(VERSION)" -X "main.Commit=$(COMMIT)" -X "main.BuildTime=$(BUILDTIME)"
-GOBUILD = CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -buildid= $(VAR_SETTING)' \
-		-o $(BUILD_DIR)
+# 构建信息注入 internal/buildinfo 包（主入口已薄化为 cmd/oci-help）
+VAR_SETTING := -X "oci-help/internal/buildinfo.Version=$(VERSION)" \
+		-X "oci-help/internal/buildinfo.Commit=$(COMMIT)" \
+		-X "oci-help/internal/buildinfo.BuildTime=$(BUILDTIME)"
+# 只放公共 flag；-o 输出路径与包路径由各目标自行拼接。
+# 注意：GOOS=windows 时 go build 不会自动补 .exe，输出文件名必须显式带 .exe。
+GOBUILD = CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -buildid= $(VAR_SETTING)'
+# 本机可执行后缀：Windows 为 .exe，其他平台为空
+EXE := $(shell go env GOEXE)
 
 PLATFORM_LIST = \
 	darwin-amd64 \
@@ -40,100 +45,64 @@ release: $(zip_release)
 
 build:
 	@-mkdir -p $(BUILD_DIR)
-	$(GOBUILD)/$(NAME)
+	$(GOBUILD) -o $(BUILD_DIR)/$(NAME)$(EXE) ./cmd/oci-help
 
 darwin-amd64:
 	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=amd64 GOOS=darwin $(GOBUILD)/$@/$(NAME)
+	GOARCH=amd64 GOOS=darwin $(GOBUILD) -o $(BUILD_DIR)/$@/$(NAME) ./cmd/oci-help
 
 darwin-arm64:
 	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=arm64 GOOS=darwin $(GOBUILD)/$@/$(NAME)
+	GOARCH=arm64 GOOS=darwin $(GOBUILD) -o $(BUILD_DIR)/$@/$(NAME) ./cmd/oci-help
 
 linux-386:
 	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=386 GOOS=linux $(GOBUILD)/$@/$(NAME)
+	GOARCH=386 GOOS=linux $(GOBUILD) -o $(BUILD_DIR)/$@/$(NAME) ./cmd/oci-help
 
 linux-amd64:
 	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=amd64 GOOS=linux $(GOBUILD)/$@/$(NAME)
+	GOARCH=amd64 GOOS=linux $(GOBUILD) -o $(BUILD_DIR)/$@/$(NAME) ./cmd/oci-help
 
 linux-arm:
 	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=arm GOOS=linux $(GOBUILD)/$@/$(NAME)
+	GOARCH=arm GOOS=linux $(GOBUILD) -o $(BUILD_DIR)/$@/$(NAME) ./cmd/oci-help
 
 linux-armv5:
 	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=arm GOOS=linux GOARM=5 $(GOBUILD)/$@/$(NAME)
+	GOARCH=arm GOOS=linux GOARM=5 $(GOBUILD) -o $(BUILD_DIR)/$@/$(NAME) ./cmd/oci-help
 
 linux-armv6:
 	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=arm GOOS=linux GOARM=6 $(GOBUILD)/$@/$(NAME)
+	GOARCH=arm GOOS=linux GOARM=6 $(GOBUILD) -o $(BUILD_DIR)/$@/$(NAME) ./cmd/oci-help
 
 linux-armv7:
 	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=arm GOOS=linux GOARM=7 $(GOBUILD)/$@/$(NAME)
+	GOARCH=arm GOOS=linux GOARM=7 $(GOBUILD) -o $(BUILD_DIR)/$@/$(NAME) ./cmd/oci-help
 
 linux-arm64:
 	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=arm64 GOOS=linux $(GOBUILD)/$@/$(NAME)
-
-linux-mips-softfloat:
-	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=mips GOMIPS=softfloat GOOS=linux $(GOBUILD)/$@/$(NAME)
-
-linux-mips-hardfloat:
-	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=mips GOMIPS=hardfloat GOOS=linux $(GOBUILD)/$@/$(NAME)
-
-linux-mipsle-softfloat:
-	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=mipsle GOMIPS=softfloat GOOS=linux $(GOBUILD)/$@/$(NAME)
-
-linux-mipsle-hardfloat:
-	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=mipsle GOMIPS=hardfloat GOOS=linux $(GOBUILD)/$@/$(NAME)
-
-linux-mips64:
-	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=mips64 GOOS=linux $(GOBUILD)/$@/$(NAME)
-
-linux-mips64le:
-	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=mips64le GOOS=linux $(GOBUILD)/$@/$(NAME)
+	GOARCH=arm64 GOOS=linux $(GOBUILD) -o $(BUILD_DIR)/$@/$(NAME) ./cmd/oci-help
 
 freebsd-386:
 	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=386 GOOS=freebsd $(GOBUILD)/$@/$(NAME)
+	GOARCH=386 GOOS=freebsd $(GOBUILD) -o $(BUILD_DIR)/$@/$(NAME) ./cmd/oci-help
 
 freebsd-amd64:
 	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=amd64 GOOS=freebsd $(GOBUILD)/$@/$(NAME)
+	GOARCH=amd64 GOOS=freebsd $(GOBUILD) -o $(BUILD_DIR)/$@/$(NAME) ./cmd/oci-help
 
 freebsd-arm64:
 	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=arm64 GOOS=freebsd $(GOBUILD)/$@/$(NAME)
+	GOARCH=arm64 GOOS=freebsd $(GOBUILD) -o $(BUILD_DIR)/$@/$(NAME) ./cmd/oci-help
 
 windows-386:
 	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=386 GOOS=windows $(GOBUILD)/$@/$(NAME).exe
+	GOARCH=386 GOOS=windows $(GOBUILD) -o $(BUILD_DIR)/$@/$(NAME).exe ./cmd/oci-help
 
 windows-amd64:
 	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=amd64 GOOS=windows $(GOBUILD)/$@/$(NAME).exe
-
-windows-arm:
-	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=arm GOOS=windows $(GOBUILD)/$@/$(NAME).exe
-
-windows-armv6:
-	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=arm GOOS=windows GOARM=6 $(GOBUILD)/$@/$(NAME).exe
-
-windows-armv7:
-	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=arm GOOS=windows GOARM=7 $(GOBUILD)/$@/$(NAME).exe
+	GOARCH=amd64 GOOS=windows $(GOBUILD) -o $(BUILD_DIR)/$@/$(NAME).exe ./cmd/oci-help
 
 windows-arm64:
 	mkdir -p $(BUILD_DIR)/$@
-	GOARCH=arm64 GOOS=windows $(GOBUILD)/$@/$(NAME).exe
+	GOARCH=arm64 GOOS=windows $(GOBUILD) -o $(BUILD_DIR)/$@/$(NAME).exe ./cmd/oci-help
