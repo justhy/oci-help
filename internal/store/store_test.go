@@ -69,7 +69,7 @@ func TestCreateTaskPersistence(t *testing.T) {
 
 	task, err := s.UpsertTask(CreateTask{
 		TenantID: tenant.ID, Region: "ap-singapore-1", Architecture: "AMD",
-		Ocpus: 1, Memory: 1, Disk: 47, Interval: 30, CreateNumbers: 2,
+		Ocpus: 1, Memory: 1, Disk: 47, RetryMin: 5, RetryMax: 30, CreateNumbers: 2,
 		OperationSystem: "Canonical Ubuntu", OSVersion: "20.04",
 	})
 	if err != nil {
@@ -84,7 +84,8 @@ func TestCreateTaskPersistence(t *testing.T) {
 	if err != nil || len(list) != 1 {
 		t.Fatalf("应读回 1 个任务, got %d err=%v", len(list), err)
 	}
-	if list[0].CreateNumbers != 2 || list[0].Disk != 47 || list[0].OSVersion != "20.04" {
+	if list[0].CreateNumbers != 2 || list[0].Disk != 47 || list[0].OSVersion != "20.04" ||
+		list[0].RetryMin != 5 || list[0].RetryMax != 30 {
 		t.Fatalf("任务字段未正确持久化: %+v", list[0])
 	}
 

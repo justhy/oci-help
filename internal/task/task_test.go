@@ -25,6 +25,24 @@ func TestTaskToInstance(t *testing.T) {
 	}
 }
 
+// TestTaskToInstanceRetryInterval 回归：任务配置的「重试间隔最小/最大」必须映射到
+// RetryMinTime/RetryMaxTime，且成功连创间隔固定为 1 秒（不再被重试间隔配置影响）。
+func TestTaskToInstanceRetryInterval(t *testing.T) {
+	inst := TaskToInstance(store.CreateTask{Architecture: "AMD", RetryMin: 5, RetryMax: 30}, 1)
+	if inst.MinTime != 1 || inst.MaxTime != 1 {
+		t.Fatalf("成功连创间隔应固定为 1s, got %d/%d", inst.MinTime, inst.MaxTime)
+	}
+	if inst.RetryMinTime != 5 || inst.RetryMaxTime != 30 {
+		t.Fatalf("RetryMinTime/RetryMaxTime = %d/%d, want 5/30", inst.RetryMinTime, inst.RetryMaxTime)
+	}
+
+	// 未配置时留 0，交由 oci.RetryDelay 回退到 MinTime/MaxTime（即 1s）。
+	unset := TaskToInstance(store.CreateTask{Architecture: "AMD"}, 1)
+	if unset.RetryMinTime != 0 || unset.RetryMaxTime != 0 {
+		t.Fatalf("未配置时应为 0, got %d/%d", unset.RetryMinTime, unset.RetryMaxTime)
+	}
+}
+
 func TestNormalizeOS(t *testing.T) {
 	cases := []struct{ in, wantName, wantVer string }{
 		{"Ubuntu", "Canonical Ubuntu", "20.04"},

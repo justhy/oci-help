@@ -25,9 +25,12 @@ func (ac *AccountCtx) getSubnet(subnetID string) (core.Subnet, error) {
 	return resp.Subnet, err
 }
 
-func (ac *AccountCtx) listSubnetsOfVcn(vcnID string) ([]core.Subnet, error) {
+// listSubnetsOfVcn 列出指定 VCN 下的子网。
+// compartment 必须传 VCN 所在的 compartment：该接口不递归子 compartment，
+// 传错（例如一律用租户根）会一条都查不到。
+func (ac *AccountCtx) listSubnetsOfVcn(compartment, vcnID string) ([]core.Subnet, error) {
 	resp, err := ac.networkClient.ListSubnets(Ctx, core.ListSubnetsRequest{
-		CompartmentId:   common.String(ac.Oracle.Tenancy),
+		CompartmentId:   common.String(compartment),
 		VcnId:           &vcnID,
 		Limit:           common.Int(100),
 		RequestMetadata: getCustomRequestMetadataWithRetryPolicy(),

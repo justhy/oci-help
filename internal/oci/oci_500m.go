@@ -32,22 +32,21 @@ func (ac *AccountCtx) Enable500M(instanceID string, sshPort int) (string, error)
 	if err != nil {
 		return "", err
 	}
-	compartment := ac.Oracle.Tenancy
+	compartment := vcnCompartment(vcn, ac.Oracle.Tenancy)
 
-	// NAT 网关
+	// NAT 网关：先查后建。查询**不能**只过滤 AVAILABLE —— "每 VCN 上限"统计的是所有
+	// 未 TERMINATED 的网关，只查 AVAILABLE 会漏掉 PROVISIONING/TERMINATING 的，
+	// 于是误判成"没有"→ 重复创建 → 撞上 "NAT gateway limit per VCN reached"。
 	natList, err := ac.networkClient.ListNatGateways(Ctx, core.ListNatGatewaysRequest{
 		CompartmentId:   common.String(compartment),
 		VcnId:           vcn.Id,
-		LifecycleState:  core.NatGatewayLifecycleStateAvailable,
 		RequestMetadata: getCustomRequestMetadataWithRetryPolicy(),
 	})
 	if err != nil {
 		return "", fmt.Errorf("查询 NAT 网关失败: %w", err)
 	}
-	var natID string
-	if len(natList.Items) > 0 {
-		natID = S(natList.Items[0].Id)
-	} else {
+	natID, found := pickNatGateway(natList.Items)
+	if !found {
 		resp, e := ac.networkClient.CreateNatGateway(Ctx, core.CreateNatGatewayRequest{
 			CreateNatGatewayDetails: core.CreateNatGatewayDetails{
 				CompartmentId: common.String(compartment),
@@ -57,12 +56,15 @@ func (ac *AccountCtx) Enable500M(instanceID string, sshPort int) (string, error)
 			RequestMetadata: getCustomRequestMetadataWithRetryPolicy(),
 		})
 		if e != nil {
+			if isLimitExceeded(e) {
+				return "", fmt.Errorf("创建 NAT 网关失败: %w\n%s", e, natGatewayLimitHint())
+			}
 			return "", fmt.Errorf("创建 NAT 网关失败: %w", e)
 		}
 		natID = S(resp.NatGateway.Id)
-		if err := ac.waitNatGatewayAvailable(natID); err != nil {
-			return "", err
-		}
+	}
+	if err := ac.waitNatGatewayAvailable(natID); err != nil {
+		return "", err
 	}
 
 	// 路由表：找一条 0.0.0.0/0 → NAT 的，否则新建
@@ -125,27 +127,15 @@ func (ac *AccountCtx) Enable500M(instanceID string, sshPort int) (string, error)
 	}
 
 	// 子网（取第一个）
-	subnets, err := ac.listSubnetsOfVcn(S(vcn.Id))
+	subnets, err := ac.listSubnetsOfVcn(compartment, S(vcn.Id))
 	if err != nil || len(subnets) == 0 {
 		return "", fmt.Errorf("未找到可用子网: %w", err)
 	}
 	subnetID := S(subnets[0].Id)
 
-	// 删除已存在的 NLB
-	if nlbs, e := ac.nlbClient.ListNetworkLoadBalancers(Ctx, networkloadbalancer.ListNetworkLoadBalancersRequest{
-		CompartmentId:   common.String(compartment),
-		LifecycleState:  networkloadbalancer.ListNetworkLoadBalancersLifecycleStateActive,
-		RequestMetadata: getCustomRequestMetadataWithRetryPolicy(),
-	}); e == nil {
-		for _, n := range nlbs.Items {
-			if n.Id != nil {
-				_, _ = ac.nlbClient.DeleteNetworkLoadBalancer(Ctx, networkloadbalancer.DeleteNetworkLoadBalancerRequest{
-					NetworkLoadBalancerId: n.Id,
-					RequestMetadata:       getCustomRequestMetadataWithRetryPolicy(),
-				})
-			}
-		}
-	}
+	// 删除本工具此前创建的 NLB（只删命名 nlb-<unix> 且位于本 VCN 子网内的，
+	// 避免把同 compartment 下用户自己的网络负载均衡器一并删掉）
+	ac.deleteOurNlbs(compartment, subnetIDSet(subnets))
 
 	// 实例主私网 IP（作为 NLB 后端）
 	privateIP := ""
@@ -206,7 +196,7 @@ func (ac *AccountCtx) Disable500M(instanceID string, retainNatGw, retainNlb bool
 	if err != nil {
 		return err
 	}
-	compartment := ac.Oracle.Tenancy
+	compartment := vcnCompartment(vcn, ac.Oracle.Tenancy)
 
 	rtList, err := ac.networkClient.ListRouteTables(Ctx, core.ListRouteTablesRequest{
 		CompartmentId:   common.String(compartment),
@@ -217,10 +207,11 @@ func (ac *AccountCtx) Disable500M(instanceID string, retainNatGw, retainNlb bool
 	if err != nil {
 		return fmt.Errorf("查询路由表失败: %w", err)
 	}
+	// 不过滤状态：只查 AVAILABLE 会漏掉 PROVISIONING/TERMINATING 的网关，
+	// 导致"看得见的删了、看不见的留着"，下次开启又撞上限。
 	natList, err := ac.networkClient.ListNatGateways(Ctx, core.ListNatGatewaysRequest{
 		CompartmentId:   common.String(compartment),
 		VcnId:           vcn.Id,
-		LifecycleState:  core.NatGatewayLifecycleStateAvailable,
 		RequestMetadata: getCustomRequestMetadataWithRetryPolicy(),
 	})
 	if err != nil {
@@ -306,19 +297,11 @@ func (ac *AccountCtx) Disable500M(instanceID string, retainNatGw, retainNlb bool
 	}
 
 	if !retainNlb {
-		if nlbs, e := ac.nlbClient.ListNetworkLoadBalancers(Ctx, networkloadbalancer.ListNetworkLoadBalancersRequest{
-			CompartmentId:   common.String(compartment),
-			LifecycleState:  networkloadbalancer.ListNetworkLoadBalancersLifecycleStateActive,
-			RequestMetadata: getCustomRequestMetadataWithRetryPolicy(),
-		}); e == nil {
-			for _, n := range nlbs.Items {
-				if n.Id != nil {
-					_, _ = ac.nlbClient.DeleteNetworkLoadBalancer(Ctx, networkloadbalancer.DeleteNetworkLoadBalancerRequest{
-						NetworkLoadBalancerId: n.Id,
-						RequestMetadata:       getCustomRequestMetadataWithRetryPolicy(),
-					})
-				}
-			}
+		// 只删本工具创建的 NLB：需要本 VCN 的子网集合；取不到就跳过（宁可不删也不误删）
+		if subnets, e := ac.listSubnetsOfVcn(compartment, S(vcn.Id)); e == nil {
+			ac.deleteOurNlbs(compartment, subnetIDSet(subnets))
+		} else {
+			ac.logf("跳过 NLB 清理（无法列出子网）: %v\n", e)
 		}
 	}
 	return nil
@@ -396,17 +379,25 @@ func (ac *AccountCtx) createNLB(compartment, subnetID, privateIP, instanceID str
 }
 
 func (ac *AccountCtx) waitNatGatewayAvailable(id string) error {
-	for i := 0; i < 60; i++ {
+	last := ""
+	for i := 0; i < 120; i++ {
 		resp, err := ac.networkClient.GetNatGateway(Ctx, core.GetNatGatewayRequest{
 			NatGatewayId:    &id,
 			RequestMetadata: getCustomRequestMetadataWithRetryPolicy(),
 		})
-		if err == nil && resp.NatGateway.LifecycleState == core.NatGatewayLifecycleStateAvailable {
-			return nil
+		if err == nil {
+			last = string(resp.NatGateway.LifecycleState)
+			switch resp.NatGateway.LifecycleState {
+			case core.NatGatewayLifecycleStateAvailable:
+				return nil
+			case core.NatGatewayLifecycleStateTerminating, core.NatGatewayLifecycleStateTerminated:
+				// 正在/已被销毁，再等也没意义：直接给出可行动的提示，别让用户干等 2 分钟
+				return fmt.Errorf("NAT 网关 %s 处于 %s，无法用于路由。请到控制台确认该 VCN 的 NAT 网关状态后重试", id, last)
+			}
 		}
 		time.Sleep(time.Second)
 	}
-	return errors.New("等待 NAT 网关可用超时")
+	return fmt.Errorf("等待 NAT 网关可用超时（最后状态: %s）", last)
 }
 
 func (ac *AccountCtx) waitRouteTableAvailable(id string) error {
@@ -458,4 +449,113 @@ func isPrivateIP(ip string) bool {
 		return parts[1] == "254"
 	}
 	return false
+}
+
+/* ------------------------------------------------------------------ 500Mbps 辅助纯逻辑（可单测） */
+
+// vcnCompartment 返回 VCN 所在的 compartment，取不到时回退 fallback。
+// OCI 的 List* 接口不会递归子 compartment：用租户根去查子 compartment 里的 VCN，
+// NAT 网关/子网/路由表会一条都查不到，进而误判为"需要新建"。
+func vcnCompartment(vcn core.Vcn, fallback string) string {
+	if c := S(vcn.CompartmentId); c != "" {
+		return c
+	}
+	return fallback
+}
+
+// natGatewayCounts 判断 NAT 网关是否仍占用"每 VCN 上限"：只有 TERMINATED 不再占用。
+func natGatewayCounts(state core.NatGatewayLifecycleStateEnum) bool {
+	return state != core.NatGatewayLifecycleStateTerminated
+}
+
+// pickNatGateway 从 NAT 网关列表中挑一个可复用的：优先 AVAILABLE，
+// 其次任意未 TERMINATED 的（调用方随后等待其变为 AVAILABLE）。
+func pickNatGateway(items []core.NatGateway) (string, bool) {
+	pending := ""
+	for i := range items {
+		if !natGatewayCounts(items[i].LifecycleState) {
+			continue
+		}
+		id := S(items[i].Id)
+		if id == "" {
+			continue
+		}
+		if items[i].LifecycleState == core.NatGatewayLifecycleStateAvailable {
+			return id, true
+		}
+		if pending == "" {
+			pending = id
+		}
+	}
+	if pending != "" {
+		return pending, true
+	}
+	return "", false
+}
+
+// isLimitExceeded 判断错误是否为 OCI 的 LimitExceeded（数量/配额上限）。
+func isLimitExceeded(err error) bool {
+	servErr, ok := asServiceError(err)
+	return ok && strings.EqualFold(servErr.GetCode(), "LimitExceeded")
+}
+
+// natGatewayLimitHint 把"NAT gateway limit per VCN reached"翻译成可行动的排查步骤。
+// 该报错有两种成因，必须都提示，否则用户无从下手。
+func natGatewayLimitHint() string {
+	return "该 VCN 的 NAT 网关已达上限（默认每 VCN 1 个）。请到 OCI 控制台确认：\n" +
+		"  1) 网络 → 虚拟云网络 → 该 VCN → 「NAT 网关」：是否已存在（可能处于 PROVISIONING/TERMINATING，\n" +
+		"     或在其它 compartment —— 该页按 VCN 列出、不受 compartment 过滤）；\n" +
+		"  2) 治理 → 限制、配额和使用量 → 服务选 Virtual Cloud Network → NAT Gateway 限额：\n" +
+		"     若为 0（Always Free 租户常见），则本租户无法创建 NAT 网关，需先申请提额。"
+}
+
+// subnetIDSet 把子网列表转成 ID 集合，用于判断 NLB 是否属于本 VCN。
+func subnetIDSet(subnets []core.Subnet) map[string]bool {
+	set := make(map[string]bool, len(subnets))
+	for i := range subnets {
+		if id := S(subnets[i].Id); id != "" {
+			set[id] = true
+		}
+	}
+	return set
+}
+
+// isOurNlb 判断某个网络负载均衡器是否由本工具创建：
+// 命名形如 nlb-<unix 秒>，且位于本 VCN 的子网内。
+// 用于清理时避免误删同 compartment 下用户自己的 NLB。
+func isOurNlb(displayName, subnetID string, vcnSubnetIDs map[string]bool) bool {
+	if subnetID == "" || !vcnSubnetIDs[subnetID] {
+		return false
+	}
+	suffix := strings.TrimPrefix(displayName, "nlb-")
+	if suffix == displayName || suffix == "" {
+		return false
+	}
+	for _, r := range suffix {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// deleteOurNlbs 删除本工具在该 VCN 内创建的 NLB。
+func (ac *AccountCtx) deleteOurNlbs(compartment string, vcnSubnetIDs map[string]bool) {
+	nlbs, err := ac.nlbClient.ListNetworkLoadBalancers(Ctx, networkloadbalancer.ListNetworkLoadBalancersRequest{
+		CompartmentId:   common.String(compartment),
+		LifecycleState:  networkloadbalancer.ListNetworkLoadBalancersLifecycleStateActive,
+		RequestMetadata: getCustomRequestMetadataWithRetryPolicy(),
+	})
+	if err != nil {
+		return
+	}
+	for _, n := range nlbs.Items {
+		if n.Id == nil || !isOurNlb(S(n.DisplayName), S(n.SubnetId), vcnSubnetIDs) {
+			continue
+		}
+		_, _ = ac.nlbClient.DeleteNetworkLoadBalancer(Ctx, networkloadbalancer.DeleteNetworkLoadBalancerRequest{
+			NetworkLoadBalancerId: n.Id,
+			RequestMetadata:       getCustomRequestMetadataWithRetryPolicy(),
+		})
+	}
 }

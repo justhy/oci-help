@@ -63,13 +63,13 @@ func (ac *AccountCtx) stopped() bool {
 
 // sleepRandomSecond 在 min~max 秒之间随机等待，期间轮询停止请求；返回 false 表示被中止。
 func (ac *AccountCtx) sleepRandomSecond(min, max int32) bool {
-	var second int32
-	if min <= 0 || max <= 0 {
-		second = 1
-	} else if min >= max {
-		second = max
-	} else {
-		second = rand.Int31n(max-min) + min
+	return ac.sleepSeconds(randomSecond(min, max))
+}
+
+// sleepSeconds 等待指定秒数并打印日志，期间轮询停止请求；返回 false 表示被中止。
+func (ac *AccountCtx) sleepSeconds(second int32) bool {
+	if second < 0 {
+		second = 0
 	}
 	ac.logf("Sleep %d Second...\n", second)
 	deadline := time.Now().Add(time.Duration(second) * time.Second)
@@ -86,6 +86,20 @@ func (ac *AccountCtx) sleepRandomSecond(min, max int32) bool {
 		}
 		time.Sleep(remain)
 	}
+}
+
+// randomSecond 返回 [min,max] 闭区间内的随机秒数；参数非法时退化为 1 秒。
+func randomSecond(min, max int32) int32 {
+	if min <= 0 {
+		min = 1
+	}
+	if max <= 0 || max < min {
+		max = min
+	}
+	if min == max {
+		return min
+	}
+	return rand.Int31n(max-min+1) + min
 }
 
 // newAccountCtx 根据数据库中的租户配置构造账号上下文并初始化各 SDK 客户端。

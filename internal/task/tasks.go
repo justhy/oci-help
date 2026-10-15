@@ -62,8 +62,8 @@ func (tm *TaskManager) load(t store.CreateTask) {
 	tm.active[t.ID] = at
 	tm.mu.Unlock()
 
-	jb.Log("【抢机任务】已加载: 账号=%s 区域=%s 架构=%s 规格=%gC/%gG 磁盘=%dGB 数量=%d 间隔=%ds",
-		t.TenantName, t.Region, t.Architecture, t.Ocpus, t.Memory, t.Disk, t.CreateNumbers, t.Interval)
+	jb.Log("【抢机任务】已加载: 账号=%s 区域=%s 架构=%s 规格=%gC/%gG 磁盘=%dGB 数量=%d 重试间隔=%s",
+		t.TenantName, t.Region, t.Architecture, t.Ocpus, t.Memory, t.Disk, t.CreateNumbers, retryRangeText(t.RetryMin, t.RetryMax))
 	if t.CreateNumbers <= 0 {
 		jb.Log("【抢机任务】创建数量为 0，任务已完成")
 		jb.FinishWith("success", "任务已完成（创建数量为 0）")
@@ -94,11 +94,6 @@ func (tm *TaskManager) run(at *activeTask) {
 		}
 	}()
 
-	interval := at.task.Interval
-	if interval <= 0 {
-		interval = 60
-	}
-
 	for {
 		if tm.shouldStop(at) {
 			at.job.Canceled("任务已停止")
@@ -126,8 +121,9 @@ func (tm *TaskManager) run(at *activeTask) {
 		}
 		ads, err := ac.EnsureAvailabilityDomains()
 		if err != nil {
-			at.job.Log("获取可用性域失败: %v，%d 秒后重试", err, interval)
-			if !tm.sleep(at, interval) {
+			gap := roundGap(at.task)
+			at.job.Log("获取可用性域失败: %v，%d 秒后重试", err, gap)
+			if !tm.sleep(at, gap) {
 				at.job.Canceled("任务已停止")
 				return
 			}
@@ -151,7 +147,7 @@ func (tm *TaskManager) run(at *activeTask) {
 			at.job.FinishWith("success", "全部实例已创建完成 🎉")
 			return
 		}
-		if !tm.sleep(at, interval) {
+		if !tm.sleep(at, roundGap(at.task)) {
 			at.job.Canceled("任务已停止")
 			return
 		}
@@ -215,11 +211,20 @@ func (tm *TaskManager) isPaused(at *activeTask) bool {
 	return atomic.LoadInt32(&at.paused) == 1
 }
 
+// ensureJob 确保任务持有的 Job 仍在注册表中。
+// 「删除日志」只把 Job 从注册表移除，任务本身仍持有它；若此时暂停/恢复，
+// 日志会写到已脱离注册表的 Job 上，界面就永远看不到该任务的输出。
+// 返回 false 表示此前确实缺失、已重新挂回（调用方可据此决定是否重置日志）。
+func (at *activeTask) ensureJob() bool {
+	if job.JobByID(at.job.ID) != nil {
+		return true
+	}
+	job.Register(at.job)
+	return false
+}
+
 // Add 新增一条抢机任务并立即开始执行。
 func (tm *TaskManager) Add(t store.CreateTask) (store.CreateTask, error) {
-	if t.Interval <= 0 {
-		t.Interval = 60
-	}
 	saved, err := store.DB.UpsertTask(t)
 	if err != nil {
 		return store.CreateTask{}, err
@@ -236,6 +241,7 @@ func (tm *TaskManager) Pause(id string) error {
 	tm.mu.Lock()
 	if at, ok := tm.active[id]; ok {
 		atomic.StoreInt32(&at.paused, 1)
+		at.ensureJob()
 		at.job.Canceled("任务已暂停")
 	}
 	tm.mu.Unlock()
@@ -250,6 +256,10 @@ func (tm *TaskManager) Resume(id string) error {
 	tm.mu.Lock()
 	if at, ok := tm.active[id]; ok {
 		atomic.StoreInt32(&at.paused, 0)
+		if !at.ensureJob() {
+			// 日志曾被「删除日志」移除：重新挂回时清空旧内容，给恢复后的运行一段干净日志。
+			at.job.ResetLogs()
+		}
 		at.job.Running("【抢机任务】已恢复执行")
 		at.job.SetProgress("运行中", 0, at.task.CreateNumbers)
 		started := atomic.LoadInt32(&at.started) == 1
@@ -291,6 +301,26 @@ func (tm *TaskManager) Stop(id string) error {
 // List 返回数据库中的全部任务。
 func (tm *TaskManager) List() ([]store.CreateTask, error) { return store.DB.ListTasks() }
 
+// roundGap 返回轮间（或可用性域获取失败后）的等待秒数：
+// 沿用任务配置的重试间隔区间，未配置时用 60 秒。
+func roundGap(t store.CreateTask) int {
+	return int(oci.RetryDelay(int32(t.RetryMin), int32(t.RetryMax), 60, 60))
+}
+
+// retryRangeText 把重试间隔区间格式化为可读文本。
+func retryRangeText(min, max int) string {
+	switch {
+	case min > 0 && max > 0:
+		return fmt.Sprintf("%d~%d 秒", min, max)
+	case min > 0:
+		return fmt.Sprintf("%d 秒", min)
+	case max > 0:
+		return fmt.Sprintf("%d 秒", max)
+	default:
+		return "默认(1 秒)"
+	}
+}
+
 // taskToInstance 把抢机任务配置转成创建实例用的模板。
 func TaskToInstance(t store.CreateTask, remaining int) config.Instance {
 	shape := "VM.Standard.E2.1.Micro"
@@ -309,8 +339,12 @@ func TaskToInstance(t store.CreateTask, remaining int) config.Instance {
 		AvailabilityDomain:     t.AvailabilityDomain,
 		InstanceDisplayName:    t.InstanceName,
 		SSH_Public_Key:         t.SSHPublicKey,
-		MinTime:                1,
-		MaxTime:                1,
+		// 成功后的连创间隔固定 1 秒；失败重试间隔由任务的 retryMin/retryMax 决定
+		// （未配置时回退到 MinTime/MaxTime，即 1 秒）。
+		MinTime:      1,
+		MaxTime:      1,
+		RetryMinTime: int32(t.RetryMin),
+		RetryMaxTime: int32(t.RetryMax),
 	}
 	if strings.Contains(arch, "ARM") {
 		inst.Ocpus = t.Ocpus

@@ -112,7 +112,7 @@
         <div class="table-wrap">
           <table id="tasksTable">
             <thead>
-              <tr><th>账号</th><th>区域</th><th>架构</th><th>规格</th><th>磁盘(GB)</th><th>剩余/总数</th><th>间隔(s)</th><th>状态</th><th class="col-actions">操作</th></tr>
+              <tr><th>账号</th><th>区域</th><th>架构</th><th>规格</th><th>磁盘(GB)</th><th>剩余/总数</th><th>重试间隔(s)</th><th>状态</th><th class="col-actions">操作</th></tr>
             </thead>
             <tbody></tbody>
           </table>
@@ -345,54 +345,9 @@
   </div><!-- /.body-wrap -->
 </div><!-- /.layout -->
 
-<!-- 登录弹窗 -->
-<div id="loginModal" class="modal hidden">
-  <div class="modal-box login-box">
-    <div class="login-head">
-      <div class="login-logo">☁️</div>
-      <h3 class="login-title">甲骨文实例管理</h3>
-      <div class="login-subtitle">请登录以继续访问</div>
-    </div>
-    <form class="login-form" id="loginForm">
-      <label class="login-field">
-        <span class="login-label">用户名</span>
-        <input id="loginUser" type="text" autocomplete="username" required>
-      </label>
-      <label class="login-field">
-        <span class="login-label">密码</span>
-        <input id="loginPass" type="password" autocomplete="current-password" required>
-      </label>
-      <div id="loginError" class="login-error hidden"></div>
-      <button type="submit" class="btn primary login-btn">登 录</button>
-    </form>
-  </div>
-</div>
-
-<!-- 通用确认 / 输入对话框（替换浏览器原生 confirm/prompt） -->
-<div id="dialogModal" class="modal hidden">
-  <div class="modal-box dialog-box">
-    <div class="modal-head"><h3 id="dialogTitle">确认</h3></div>
-    <div class="modal-body">
-      <div id="dialogMessage" class="dialog-message"></div>
-      <input id="dialogInput" class="dialog-input hidden" type="text">
-    </div>
-    <div class="modal-foot">
-      <button class="btn" id="dialogCancel">取消</button>
-      <button class="btn primary" id="dialogOk">确定</button>
-    </div>
-  </div>
-</div>
-
-<!-- 实例详情弹窗 -->
-<div id="modal" class="modal hidden">
-  <div class="modal-box">
-    <div class="modal-head">
-      <h3 id="modalTitle">实例详情</h3>
-      <button class="btn ghost" id="modalClose">✕</button>
-    </div>
-    <div class="modal-body" id="modalBody"></div>
-  </div>
-</div>
+<!-- 弹窗栈容器：详情/表单、确认框、输入框、登录框都由 app.js 动态挂到这里，
+     后开的在上层（z-index 按栈深度内联设置），支持多级叠加 -->
+<div id="modalRoot"></div>
 
 <div id="toast" class="toast hidden"></div>
 <script src="app.js"></script>

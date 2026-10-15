@@ -551,6 +551,8 @@ td.actions { display: flex; gap: 6px; }
   z-index: 50;
   animation: fadeIn .18s ease;
 }
+/* .modal 的层级由 JS 按弹窗栈深度内联设置（基准 50，每层 +10），
+   这里只给一个兜底值；不要再按 id 写死层级，否则多级叠加会被盖住。 */
 .modal-box {
   background: var(--bg-soft);
   border: 1px solid var(--border);

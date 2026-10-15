@@ -77,25 +77,73 @@ function clearCred() {
 
 let loginResolve = null;
 let loginReject = null;
-let loginVisible = false;
+let loginLayer = null; // 登录框所在的弹窗层（与其它弹窗同一个栈）
 
-function showLogin(errMsg) {
-  const modal = document.getElementById('loginModal');
-  const errEl = document.getElementById('loginError');
-  modal.classList.remove('hidden');
-  loginVisible = true;
-  if (errMsg) {
-    errEl.textContent = errMsg;
+const LOGIN_HTML =
+  '<div class="login-head">' +
+    '<div class="login-logo">☁️</div>' +
+    '<h3 class="login-title">甲骨文实例管理</h3>' +
+    '<div class="login-subtitle">请登录以继续访问</div>' +
+  '</div>' +
+  '<form class="login-form">' +
+    '<label class="login-field"><span class="login-label">用户名</span>' +
+      '<input class="login-user" type="text" autocomplete="username" required></label>' +
+    '<label class="login-field"><span class="login-label">密码</span>' +
+      '<input class="login-pass" type="password" autocomplete="current-password" required></label>' +
+    '<div class="login-error hidden"></div>' +
+    '<button type="submit" class="btn primary login-btn">登 录</button>' +
+  '</form>';
+
+function setLoginError(msg) {
+  if (!loginLayer) return;
+  const errEl = loginLayer.box.querySelector('.login-error');
+  if (msg) {
+    errEl.textContent = msg;
     errEl.classList.remove('hidden');
   } else {
+    errEl.textContent = '';
     errEl.classList.add('hidden');
   }
-  document.getElementById('loginUser').focus();
 }
+
+function showLogin(errMsg) {
+  if (loginLayer) {
+    setLoginError(errMsg);
+    return;
+  }
+  const layer = buildModal({ raw: LOGIN_HTML, boxClass: 'login-box' });
+  const formEl = layer.box.querySelector('.login-form');
+  const userEl = layer.box.querySelector('.login-user');
+  const passEl = layer.box.querySelector('.login-pass');
+  formEl.addEventListener('submit', function (e) {
+    e.preventDefault();
+    const user = userEl.value.trim();
+    const pass = passEl.value;
+    if (!user || !pass) {
+      setLoginError('请输入用户名和密码');
+      return;
+    }
+    setCred(user, pass);
+    hideLogin();
+    if (loginResolve) {
+      const r = loginResolve;
+      loginResolve = null;
+      loginReject = null;
+      r();
+    }
+  });
+  // 登录框不可点背景关闭（必须登录才能继续）
+  pushLayer(layer, null, false);
+  loginLayer = layer;
+  setLoginError(errMsg);
+  userEl.focus();
+}
+
 function hideLogin() {
-  document.getElementById('loginModal').classList.add('hidden');
-  document.getElementById('loginPass').value = '';
-  loginVisible = false;
+  if (loginLayer) {
+    popLayer(loginLayer);
+    loginLayer = null;
+  }
 }
 
 // promptLogin 返回 Promise，等用户提交后才 resolve；在别处取消登录则 reject。
@@ -145,6 +193,16 @@ function esc(v) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// retryRangeText 把抢机任务的重试间隔区间格式化为列表展示文本。
+function retryRangeText(t) {
+  const min = t.retryMin || 0;
+  const max = t.retryMax || 0;
+  if (min > 0 && max > 0) return min + '~' + max;
+  if (min > 0) return String(min);
+  if (max > 0) return String(max);
+  return '默认';
+}
+
 let toastTimer = null;
 function toast(msg, type) {
   const el = document.getElementById('toast');
@@ -154,40 +212,155 @@ function toast(msg, type) {
   toastTimer = setTimeout(function () { el.classList.add('hidden'); }, 4000);
 }
 
-function openModal(title, html) {
-  document.getElementById('modalTitle').textContent = title;
-  document.getElementById('modalBody').innerHTML = html;
-  document.getElementById('modal').classList.remove('hidden');
+/* ================================================================== 弹窗栈
+ * 所有弹窗（详情/表单、确认框、输入框、登录框）统一入栈管理：
+ *   - 后开的在上层，z-index 按栈深度内联计算（基准 50，每层 +10），无需手工维护；
+ *   - closeModal() 关闭栈顶；每层自带 onClose 回调，多级叠加互不干扰；
+ *   - 点击遮罩（.modal 本身）关闭该层，登录框除外。
+ */
+const MODAL_Z_BASE = 50;
+const MODAL_Z_STEP = 10;
+const modalStack = [];
+
+function modalZ(depth) { return MODAL_Z_BASE + depth * MODAL_Z_STEP; }
+
+// buildModal 构造一层弹窗 DOM（不入栈）。opts:
+//   title     标题
+//   html      正文 HTML
+//   foot      正文之后的页脚元素（可选）
+//   boxClass  追加到 .modal-box 的类名
+//   closable  是否显示右上角 ✕（默认显示）
+//   raw       直接作为 .modal-box 的 innerHTML（登录框这类自定义结构用）
+function buildModal(opts) {
+  opts = opts || {};
+  const root = document.createElement('div');
+  root.className = 'modal';
+  const box = document.createElement('div');
+  box.className = 'modal-box' + (opts.boxClass ? ' ' + opts.boxClass : '');
+  let bodyEl = box;
+  let closeBtn = null;
+  let titleEl = null;
+  if (opts.raw) {
+    box.innerHTML = opts.raw;
+  } else {
+    const head = document.createElement('div');
+    head.className = 'modal-head';
+    titleEl = document.createElement('h3');
+    titleEl.textContent = opts.title || '';
+    head.appendChild(titleEl);
+    if (opts.closable !== false) {
+      closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.className = 'btn ghost';
+      closeBtn.textContent = '✕';
+      head.appendChild(closeBtn);
+    }
+    bodyEl = document.createElement('div');
+    bodyEl.className = 'modal-body';
+    if (typeof opts.html === 'string') bodyEl.innerHTML = opts.html;
+    box.appendChild(head);
+    box.appendChild(bodyEl);
+    if (opts.foot) box.appendChild(opts.foot);
+  }
+  root.appendChild(box);
+  return { root: root, box: box, bodyEl: bodyEl, titleEl: titleEl, closeBtn: closeBtn, onClose: null };
 }
+
+// relayoutModals 按当前栈深度重排 z-index（中间层被弹出后仍保持连续）
+function relayoutModals() {
+  modalStack.forEach(function (layer, i) { layer.root.style.zIndex = String(modalZ(i)); });
+}
+
+// pushLayer 入栈并置于栈顶；dismissible=false 时点遮罩不关闭（如登录框）。
+// onClose(result) 在该层关闭时调用一次。
+function pushLayer(layer, onClose, dismissible) {
+  layer.onClose = onClose || null;
+  layer.root.style.zIndex = String(modalZ(modalStack.length));
+  if (dismissible !== false) {
+    layer.root.addEventListener('click', function (e) {
+      if (e.target === layer.root) popLayer(layer, undefined);
+    });
+  }
+  document.getElementById('modalRoot').appendChild(layer.root);
+  modalStack.push(layer);
+  return layer;
+}
+
+// popLayer 弹出指定层（默认栈顶）并触发其 onClose(result)
+function popLayer(layer, result) {
+  const target = layer || modalStack[modalStack.length - 1];
+  if (!target) return null;
+  const idx = modalStack.indexOf(target);
+  if (idx < 0) return null;
+  modalStack.splice(idx, 1);
+  if (target.root.parentNode) target.root.parentNode.removeChild(target.root);
+  const cb = target.onClose;
+  target.onClose = null;
+  relayoutModals();
+  if (cb) cb(result);
+  return target;
+}
+
+// modalTop 返回栈顶弹窗层
+function modalTop() { return modalStack[modalStack.length - 1] || null; }
+
+// openModal 打开一个内容弹窗（详情/表单），返回该层便于调用方继续绑定。
+function openModal(title, html, opts) {
+  opts = opts || {};
+  const layer = buildModal({ title: title, html: html, boxClass: opts.boxClass, closable: opts.closable });
+  if (layer.closeBtn) layer.closeBtn.addEventListener('click', function () { popLayer(layer); });
+  return pushLayer(layer);
+}
+
+// closeModal 关闭栈顶弹窗。
 function closeModal() {
-  document.getElementById('modal').classList.add('hidden');
+  const top = modalTop();
+  if (top) popLayer(top);
 }
 
-/* ---- 自定义确认框 / 输入框（替换浏览器原生 confirm / prompt） ---- */
-var dialogResolve = null;
-
-function closeDialog(result) {
-  document.getElementById('dialogModal').classList.add('hidden');
-  var r = dialogResolve;
-  dialogResolve = null;
-  if (r) r(result);
+// setModalContent 原地更新指定层（默认栈顶）的标题与正文。
+// 用于「先占位（加载中）、拿到数据后再填充」的刷新场景，避免连开两层。
+function setModalContent(title, html, layer) {
+  const target = layer || modalTop();
+  if (!target) return null;
+  if (target.titleEl && title != null) target.titleEl.textContent = title;
+  if (target.bodyEl && html != null) target.bodyEl.innerHTML = html;
+  return target;
 }
 
-// uiConfirm 返回 Promise<boolean>
+/* ---- 自定义确认框 / 输入框（替换浏览器原生 confirm / prompt，同栈叠加） ---- */
+
+function dialogFoot(okText, danger) {
+  const foot = document.createElement('div');
+  foot.className = 'modal-foot';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'btn';
+  cancel.textContent = '取消';
+  const ok = document.createElement('button');
+  ok.type = 'button';
+  ok.className = 'btn ' + (danger ? 'danger' : 'primary');
+  ok.textContent = okText || '确定';
+  foot.appendChild(cancel);
+  foot.appendChild(ok);
+  return { foot: foot, cancel: cancel, ok: ok };
+}
+
+// uiConfirm 返回 Promise<boolean>（取消/点遮罩为 false）
 function uiConfirm(message, opts) {
   opts = opts || {};
   return new Promise(function (resolve) {
-    dialogResolve = resolve;
-    document.getElementById('dialogTitle').textContent = opts.title || '确认操作';
-    document.getElementById('dialogMessage').textContent = message;
-    var input = document.getElementById('dialogInput');
-    input.classList.add('hidden');
-    input.value = '';
-    var ok = document.getElementById('dialogOk');
-    ok.textContent = opts.okText || '确定';
-    ok.className = 'btn ' + (opts.danger ? 'danger' : 'primary');
-    document.getElementById('dialogModal').classList.remove('hidden');
-    ok.focus();
+    const b = dialogFoot(opts.okText, opts.danger);
+    const layer = buildModal({
+      title: opts.title || '确认操作',
+      html: '<div class="dialog-message"></div>',
+      boxClass: 'dialog-box', foot: b.foot, closable: false
+    });
+    layer.bodyEl.querySelector('.dialog-message').textContent = message;
+    b.cancel.addEventListener('click', function () { popLayer(layer, false); });
+    b.ok.addEventListener('click', function () { popLayer(layer, true); });
+    pushLayer(layer, function (r) { resolve(r === true); });
+    b.ok.focus();
   });
 }
 
@@ -195,16 +368,21 @@ function uiConfirm(message, opts) {
 function uiPrompt(message, defaultValue, opts) {
   opts = opts || {};
   return new Promise(function (resolve) {
-    dialogResolve = resolve;
-    document.getElementById('dialogTitle').textContent = opts.title || '请输入';
-    document.getElementById('dialogMessage').textContent = message;
-    var input = document.getElementById('dialogInput');
-    input.classList.remove('hidden');
+    const b = dialogFoot(opts.okText, false);
+    const layer = buildModal({
+      title: opts.title || '请输入',
+      html: '<div class="dialog-message"></div><input class="dialog-input" type="text">',
+      boxClass: 'dialog-box', foot: b.foot, closable: false
+    });
+    layer.bodyEl.querySelector('.dialog-message').textContent = message;
+    const input = layer.bodyEl.querySelector('.dialog-input');
     input.value = defaultValue || '';
-    var ok = document.getElementById('dialogOk');
-    ok.textContent = opts.okText || '确定';
-    ok.className = 'btn primary';
-    document.getElementById('dialogModal').classList.remove('hidden');
+    b.cancel.addEventListener('click', function () { popLayer(layer, null); });
+    b.ok.addEventListener('click', function () { popLayer(layer, input.value.trim()); });
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); b.ok.click(); }
+    });
+    pushLayer(layer, function (r) { resolve(r == null ? null : r); });
     input.focus();
     input.select();
   });
@@ -353,7 +531,7 @@ async function bulkAction(action) {
 }
 
 async function showInstanceDetail(id) {
-  openModal('实例详情', '<div class="hint">加载中...</div>');
+  const layer = openModal('实例详情', '<div class="hint">加载中...</div>');
   try {
     const data = await api('/api/instance?account=' + encodeURIComponent(state.account) + '&id=' + encodeURIComponent(id));
     const d = data.instance;
@@ -384,9 +562,9 @@ async function showInstanceDetail(id) {
         '<button class="btn" data-dact="500m-off" data-id="' + esc(d.id) + '">关闭 500Mbps</button>' +
         '<button class="btn danger" data-dact="rescue" data-id="' + esc(d.id) + '">自动救援/缩盘</button>' +
       '</div>';
-    openModal('实例详情 - ' + (d.displayName || ''), html);
+    setModalContent('实例详情 - ' + (d.displayName || ''), html, layer);
   } catch (e) {
-    openModal('实例详情', '<div class="hint">加载失败: ' + esc(e.message) + '</div>');
+    setModalContent('实例详情', '<div class="hint">加载失败: ' + esc(e.message) + '</div>', layer);
   }
 }
 
@@ -668,11 +846,17 @@ function renderJobDetail(job) {
 async function cancelJob() {
   const job = state.currentJobId ? findJob(state.currentJobId) : null;
   if (!job) return;
-  if (!(await uiConfirm('确定停止任务 ' + job.id + ' ？已创建的实例不会被删除。', { danger: true, okText: '停止' }))) return;
+  // 抢机任务（type=task）由任务管理器控制，停止 = 暂停（可在任务列表「恢复」）
+  const isTask = job.type === 'task';
+  const msg = isTask
+    ? '确定暂停抢机任务 ' + job.id + ' ？已创建的实例不会被删除，可在任务列表点「恢复」继续。'
+    : '确定停止任务 ' + job.id + ' ？已创建的实例不会被删除。';
+  if (!(await uiConfirm(msg, { danger: true, okText: isTask ? '暂停' : '停止' }))) return;
   try {
     const data = await api('/api/job/cancel', { method: 'POST', body: { id: job.id } });
     toast(data.message || '已请求停止任务', 'success');
     await loadJobs();
+    if (isTask) await loadTasks();
   } catch (e) {
     toast('停止失败: ' + e.message, 'error');
   }
@@ -806,30 +990,6 @@ function bindEvents() {
 
   document.getElementById('refreshBtn').addEventListener('click', forceReloadCurrentTab);
   document.getElementById('themeBtn').addEventListener('click', toggleTheme);
-  document.getElementById('modalClose').addEventListener('click', closeModal);
-  document.getElementById('modal').addEventListener('click', function (e) {
-    if (e.target.id === 'modal') closeModal();
-  });
-
-  // 登录表单
-  document.getElementById('loginForm').addEventListener('submit', function (e) {
-    e.preventDefault();
-    const user = document.getElementById('loginUser').value.trim();
-    const pass = document.getElementById('loginPass').value;
-    if (!user || !pass) {
-      const errEl = document.getElementById('loginError');
-      errEl.textContent = '请输入用户名和密码';
-      errEl.classList.remove('hidden');
-      return;
-    }
-    setCred(user, pass);
-    hideLogin();
-    if (loginResolve) {
-      loginResolve();
-      loginResolve = null;
-      loginReject = null;
-    }
-  });
 
   document.getElementById('exportIpsBtn').addEventListener('click', exportIps);
   document.getElementById('reloadVolumesBtn').addEventListener('click', function () { loadVolumes(true); });
@@ -854,7 +1014,8 @@ function bindEvents() {
     volumeAction(btn.dataset.vact, btn.dataset.id);
   });
 
-  document.getElementById('modalBody').addEventListener('click', function (e) {
+  // 弹窗内容里的按钮统一在容器上做事件委托（各层都挂在 #modalRoot 下）
+  document.getElementById('modalRoot').addEventListener('click', function (e) {
     const tbtn = e.target.closest('button[data-tact]');
     if (tbtn) { taskAction(tbtn.dataset.tact, tbtn.dataset.id); return; }
     const nbtn = e.target.closest('button[data-nact]');
@@ -884,27 +1045,6 @@ function bindEvents() {
   });
 
   document.getElementById('deleteJobsBtn').addEventListener('click', deleteJobsByStatus);
-
-  // 通用对话框按钮
-  document.getElementById('dialogOk').addEventListener('click', function () {
-    const input = document.getElementById('dialogInput');
-    const val = input.classList.contains('hidden') ? true : input.value.trim();
-    closeDialog(val);
-  });
-  document.getElementById('dialogCancel').addEventListener('click', function () {
-    closeDialog(document.getElementById('dialogInput').classList.contains('hidden') ? false : null);
-  });
-  document.getElementById('dialogModal').addEventListener('click', function (e) {
-    if (e.target.id === 'dialogModal') {
-      closeDialog(document.getElementById('dialogInput').classList.contains('hidden') ? false : null);
-    }
-  });
-  document.getElementById('dialogInput').addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      document.getElementById('dialogOk').click();
-    }
-  });
 }
 
 /* ================================================================== 抢机任务 */
@@ -940,7 +1080,7 @@ function renderTasks() {
       '<td class="mono">' + spec + '</td>' +
       '<td class="mono">' + t.disk + '</td>' +
       '<td class="mono">' + t.createNumbers + '</td>' +
-      '<td class="mono">' + t.interval + '</td>' +
+      '<td class="mono">' + esc(retryRangeText(t)) + '</td>' +
       '<td>' + status + '</td>' +
       '<td class="actions">' +
         (t.paused
@@ -974,7 +1114,8 @@ function taskForm(task) {
     '<label>内存 GB (ARM)<input id="taskMemory" type="number" step="0.5" value="' + (t.memory || 6) + '"></label>' +
     '<label>磁盘 GB<input id="taskDisk" type="number" value="' + (t.disk || 47) + '"></label>' +
     '<label>创建数量<input id="taskCount" type="number" value="' + (t.createNumbers || 1) + '"></label>' +
-    '<label>重试间隔(秒)<input id="taskInterval" type="number" value="' + (t.interval || 60) + '"></label>' +
+    '<label>重试间隔最小(秒)<input id="taskRetryMin" type="number" min="0" value="' + (t.retryMin || '') + '" placeholder="留空=默认 1 秒"></label>' +
+    '<label>重试间隔最大(秒)<input id="taskRetryMax" type="number" min="0" value="' + (t.retryMax || '') + '" placeholder="留空=同最小"></label>' +
     '<label>操作系统<select id="taskOs">' + osOpts + '</select></label>' +
     '<label>系统版本<input id="taskOsVer" value="' + esc(t.osVersion || '') + '" placeholder="Ubuntu 20.04 / CentOS 8"></label>' +
     '<label>实例名称<input id="taskName" value="' + esc(t.instanceName || '') + '"></label>' +
@@ -1092,7 +1233,8 @@ async function saveTask(id) {
     memory: Number(document.getElementById('taskMemory').value) || 1,
     disk: Number(document.getElementById('taskDisk').value) || 47,
     createNumbers: Number(document.getElementById('taskCount').value) || 1,
-    interval: Number(document.getElementById('taskInterval').value) || 60,
+    retryMin: Number(document.getElementById('taskRetryMin').value) || 0,
+    retryMax: Number(document.getElementById('taskRetryMax').value) || 0,
     operationSystem: document.getElementById('taskOs').value,
     osVersion: document.getElementById('taskOsVer').value.trim(),
     instanceName: document.getElementById('taskName').value.trim(),
@@ -1122,6 +1264,8 @@ async function taskAction(action, id) {
     const data = await api(path, { method: 'POST', body: { id: id } });
     toast(data.message || '操作成功', 'success');
     await loadTasks();
+    // 暂停/恢复/删除都会影响任务日志列表（Job 注册表），一并刷新
+    await loadJobs();
   } catch (e) {
     toast('操作失败: ' + e.message, 'error');
   }

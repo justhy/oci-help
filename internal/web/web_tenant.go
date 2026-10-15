@@ -136,7 +136,8 @@ type taskSaveRequest struct {
 	Ocpus              float32 `json:"ocpus"`
 	Memory             float32 `json:"memory"`
 	Disk               int64   `json:"disk"`
-	Interval           int     `json:"interval"`
+	RetryMin           int     `json:"retryMin"`
+	RetryMax           int     `json:"retryMax"`
 	CreateNumbers      int     `json:"createNumbers"`
 	RootPassword       string  `json:"rootPassword"`
 	OperationSystem    string  `json:"operationSystem"`

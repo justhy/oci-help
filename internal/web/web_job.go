@@ -10,6 +10,7 @@ import (
 	"oci-help/internal/config"
 	"oci-help/internal/job"
 	"oci-help/internal/oci"
+	"oci-help/internal/task"
 )
 
 func handleJobs(w http.ResponseWriter, r *http.Request) {
@@ -37,6 +38,10 @@ func handleJob(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleJobCancel 请求停止一个正在运行的任务。
+//
+// 抢机任务（type=task）的执行循环由 task.Manager 控制，只认暂停标志与停止通道；
+// 仅调用 job.Stop() 只改内存标志，循环读不到，会出现"停止中"却仍在运行。
+// 因此抢机任务走 task.Manager.Pause（会持久化 paused，重启后也不会自动续抢）。
 func handleJobCancel(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -56,6 +61,14 @@ func handleJobCancel(w http.ResponseWriter, r *http.Request) {
 	j := job.JobByID(req.ID)
 	if j == nil {
 		writeErr(w, http.StatusNotFound, "任务不存在")
+		return
+	}
+	if j.Type == "task" {
+		if err := task.Manager.Pause(req.ID); err != nil {
+			writeErr(w, http.StatusInternalServerError, "暂停抢机任务失败: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"message": "抢机任务已暂停"})
 		return
 	}
 	j.Stop()

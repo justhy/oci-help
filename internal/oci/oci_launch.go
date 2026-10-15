@@ -1,6 +1,7 @@
 package oci
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -193,12 +194,16 @@ func (ac *AccountCtx) LaunchInstances(ads []identity.AvailabilityDomain, inst co
 
 	minTime := inst.MinTime
 	maxTime := inst.MaxTime
+	retryMin := inst.RetryMinTime
+	retryMax := inst.RetryMaxTime
 
 	SKIP_RETRY_MAP := make(map[string]bool) // key 为可用性域名称，避免下标跨轮错位
 	var usableAdsTemp = make([]identity.AvailabilityDomain, 0)
 
 	retry := inst.Retry
 	var failTimes int32 = 0
+	// 连续命中限流（429）的次数，用于指数退避；成功创建后清零。
+	var rateLimitStreak int32 = 0
 
 	var runTimes int32 = 0
 
@@ -258,6 +263,7 @@ func (ac *AccountCtx) LaunchInstances(ads []identity.AvailabilityDomain, inst co
 		if err == nil {
 			SUCCESS = true
 			num++
+			rateLimitStreak = 0
 
 			duration := FormatDuration(time.Since(startTime))
 
@@ -325,7 +331,18 @@ func (ac *AccountCtx) LaunchInstances(ads []identity.AvailabilityDomain, inst co
 				}
 			}
 
-			if !ac.sleepRandomSecond(minTime, maxTime) {
+			// 失败重试等待：在任务配置的 [retryMin,retryMax] 内随机（未配置时回退 MinTime/MaxTime）；
+			// 连续命中限流（429）时按 2 的幂指数退避，成功创建后清零。
+			if isRateLimitError(err) {
+				rateLimitStreak++
+			} else {
+				rateLimitStreak = 0
+			}
+			delay := applyBackoff(RetryDelay(retryMin, retryMax, minTime, maxTime), rateLimitStreak)
+			if rateLimitStreak > 0 {
+				ac.logf("\033[1;33m[%s] 命中限流(429)，连续第 %d 次，退避后等待 %d 秒\033[0m\n", ac.Name, rateLimitStreak, delay)
+			}
+			if !ac.sleepSeconds(delay) {
 				ac.logf("\033[1;33m[%s] 任务已被中止，停止创建\033[0m\n", ac.Name)
 				return
 			}
@@ -406,7 +423,7 @@ func classifyLaunchError(err error) (notRetryable bool, msg string) {
 	if err == nil {
 		return false, ""
 	}
-	servErr, isServErr := common.IsServiceError(err)
+	servErr, isServErr := asServiceError(err)
 	if !isServErr {
 		return false, err.Error()
 	}
@@ -439,4 +456,70 @@ func eachADIndex(pos, each, failTimes, adCount int32) int32 {
 		idx += adCount
 	}
 	return idx
+}
+
+/* ------------------------------------------------------------------ 重试等待与限流退避（可单测的纯逻辑） */
+
+// maxRetryBackoffSeconds 是限流指数退避的等待上限（秒）。
+const maxRetryBackoffSeconds = 180
+
+// asServiceError 从错误链中提取 OCI 服务错误。
+// 用 errors.As 而非 common.IsServiceError：后者只做一次类型断言，
+// 错误一旦被包装（fmt.Errorf %w 等）就会漏判，导致限流退避失效。
+func asServiceError(err error) (common.ServiceError, bool) {
+	if err == nil {
+		return nil, false
+	}
+	var servErr common.ServiceError
+	if errors.As(err, &servErr) {
+		return servErr, true
+	}
+	return nil, false
+}
+
+// RetryDelay 返回一次失败重试的等待秒数：在 [min,max] 闭区间内随机。
+// min<=0 时用 fallbackMin，max<=0 时用 fallbackMax；全部无效时退化为 1 秒。
+func RetryDelay(min, max, fallbackMin, fallbackMax int32) int32 {
+	if min <= 0 {
+		min = fallbackMin
+	}
+	if max <= 0 {
+		max = fallbackMax
+	}
+	return randomSecond(min, max)
+}
+
+// isRateLimitError 判断错误是否为限流。
+// 依次匹配：HTTP 429、错误码含 TooManyRequests、错误文案含 "too many requests"
+// （OCI 的限流文案形如 "Too many requests for the user"）。
+func isRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if servErr, ok := asServiceError(err); ok {
+		if servErr.GetHTTPStatusCode() == 429 {
+			return true
+		}
+		if strings.Contains(strings.ToLower(servErr.GetCode()), "toomanyrequest") {
+			return true
+		}
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "too many requests")
+}
+
+// applyBackoff 对基础等待秒数做指数退避：连续第 streak 次限流时乘以 2^(streak-1)，
+// 上限 maxRetryBackoffSeconds；streak<=1（非连续限流）时原样返回。
+func applyBackoff(base int32, streak int32) int32 {
+	if base <= 0 || streak <= 1 {
+		return base
+	}
+	shift := streak - 1
+	if shift > 16 {
+		shift = 16
+	}
+	d := int64(base) << uint(shift)
+	if d > maxRetryBackoffSeconds {
+		d = maxRetryBackoffSeconds
+	}
+	return int32(d)
 }

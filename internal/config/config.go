@@ -52,6 +52,10 @@ type Instance struct {
 	CloudInit              string  `ini:"cloud-init"`
 	MinTime                int32   `ini:"minTime"`
 	MaxTime                int32   `ini:"maxTime"`
+	// RetryMinTime / RetryMaxTime 是失败重试的等待区间（秒），随机取值；
+	// <=0 时回退到 MinTime/MaxTime。仅作用于失败重试，不影响成功后的连创间隔。
+	RetryMinTime int32 `ini:"retryMinTime"`
+	RetryMaxTime int32 `ini:"retryMaxTime"`
 }
 
 // Config 是进程级配置快照。File 保留原始 INI 句柄，

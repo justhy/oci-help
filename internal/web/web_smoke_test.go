@@ -120,7 +120,7 @@ func TestTenantSaveValidation(t *testing.T) {
 func TestTasksEndpoint(t *testing.T) {
 	setupWebTest(t)
 	tenants, _ := store.DB.ListTenants()
-	if _, err := store.DB.UpsertTask(store.CreateTask{TenantID: tenants[0].ID, Architecture: "AMD", CreateNumbers: 2, Disk: 47, Interval: 60}); err != nil {
+	if _, err := store.DB.UpsertTask(store.CreateTask{TenantID: tenants[0].ID, Architecture: "AMD", CreateNumbers: 2, Disk: 47, RetryMin: 5, RetryMax: 30}); err != nil {
 		t.Fatal(err)
 	}
 	w := doJSON(t, handleTasks, http.MethodGet, "")

@@ -107,6 +107,18 @@ func Remove(id string) {
 	jobsMu.Unlock()
 }
 
+// Register 把已有的 Job 重新放回注册表。
+// 「删除日志」只把 Job 从注册表移除，抢机任务本身仍持有该 Job；
+// 恢复/暂停时需要重新挂回，否则日志界面会一直显示"暂无任务"。
+func Register(j *Job) {
+	if j == nil || j.ID == "" {
+		return
+	}
+	jobsMu.Lock()
+	jobs[j.ID] = j
+	jobsMu.Unlock()
+}
+
 var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func (j *Job) Log(format string, a ...interface{}) {
@@ -130,6 +142,15 @@ func (j *Job) SetProgress(stage string, done, total int) {
 	j.Stage = stage
 	j.Done = done
 	j.Total = total
+	j.mu.Unlock()
+}
+
+// ResetLogs 清空已累积的日志与裁剪计数。
+// 用于「删除日志」之后任务被恢复的场景：重新挂回注册表时给一段干净的日志。
+func (j *Job) ResetLogs() {
+	j.mu.Lock()
+	j.Logs = nil
+	j.logDropped = 0
 	j.mu.Unlock()
 }
 

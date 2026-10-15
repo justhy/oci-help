@@ -62,7 +62,8 @@ type CreateTask struct {
 	Memory             float32 `json:"memory"`
 	Disk               int64   `json:"disk"`
 	Architecture       string  `json:"architecture"`
-	Interval           int     `json:"interval"`
+	RetryMin           int     `json:"retryMin"` // 失败重试等待下限（秒），<=0 表示未设置
+	RetryMax           int     `json:"retryMax"` // 失败重试等待上限（秒），<=0 表示未设置
 	CreateNumbers      int     `json:"createNumbers"`
 	RootPassword       string  `json:"rootPassword"`
 	OperationSystem    string  `json:"operationSystem"`
@@ -102,7 +103,8 @@ CREATE TABLE IF NOT EXISTS oci_create_task (
   memory              REAL,
   disk                INTEGER,
   architecture        TEXT,
-  interval            INTEGER,
+  retry_min           INTEGER,
+  retry_max           INTEGER,
   create_numbers      INTEGER,
   root_password       TEXT,
   operation_system    TEXT,
@@ -154,8 +156,17 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) migrate() error {
-	_, err := s.db.Exec(schemaSQL)
-	return err
+	if _, err := s.db.Exec(schemaSQL); err != nil {
+		return err
+	}
+	// 老库补列：SQLite 不支持 ADD COLUMN IF NOT EXISTS，重复添加会报 duplicate column，忽略即可。
+	for _, col := range []string{"retry_min", "retry_max"} {
+		if _, err := s.db.Exec(`ALTER TABLE oci_create_task ADD COLUMN ` + col + ` INTEGER`); err != nil &&
+			!strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+	return nil
 }
 
 func nowStr() string { return time.Now().Format("2006-01-02 15:04:05") }
@@ -295,7 +306,7 @@ func (s *Store) ListTasks() ([]CreateTask, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(`SELECT id,COALESCE(user_id,''),COALESCE(oci_region,''),COALESCE(ocpus,0),
-		COALESCE(memory,0),COALESCE(disk,0),COALESCE(architecture,''),COALESCE(interval,0),
+		COALESCE(memory,0),COALESCE(disk,0),COALESCE(architecture,''),COALESCE(retry_min,0),COALESCE(retry_max,0),
 		COALESCE(create_numbers,0),COALESCE(root_password,''),COALESCE(operation_system,''),
 		COALESCE(os_version,''),COALESCE(ssh_public_key,''),COALESCE(instance_name,''),
 		COALESCE(availability_domain,''),COALESCE(create_time,''),COALESCE(paused,0)
@@ -308,7 +319,7 @@ func (s *Store) ListTasks() ([]CreateTask, error) {
 	for rows.Next() {
 		var t CreateTask
 		if err := rows.Scan(&t.ID, &t.TenantID, &t.Region, &t.Ocpus, &t.Memory, &t.Disk,
-			&t.Architecture, &t.Interval, &t.CreateNumbers, &t.RootPassword, &t.OperationSystem,
+			&t.Architecture, &t.RetryMin, &t.RetryMax, &t.CreateNumbers, &t.RootPassword, &t.OperationSystem,
 			&t.OSVersion, &t.SSHPublicKey, &t.InstanceName, &t.AvailabilityDomain, &t.CreateTime, &t.Paused); err != nil {
 			return nil, err
 		}
@@ -322,13 +333,13 @@ func (s *Store) GetTask(id string) (CreateTask, bool, error) {
 	defer s.mu.Unlock()
 	var t CreateTask
 	row := s.db.QueryRow(`SELECT id,COALESCE(user_id,''),COALESCE(oci_region,''),COALESCE(ocpus,0),
-		COALESCE(memory,0),COALESCE(disk,0),COALESCE(architecture,''),COALESCE(interval,0),
+		COALESCE(memory,0),COALESCE(disk,0),COALESCE(architecture,''),COALESCE(retry_min,0),COALESCE(retry_max,0),
 		COALESCE(create_numbers,0),COALESCE(root_password,''),COALESCE(operation_system,''),
 		COALESCE(os_version,''),COALESCE(ssh_public_key,''),COALESCE(instance_name,''),
 		COALESCE(availability_domain,''),COALESCE(create_time,''),COALESCE(paused,0)
 		FROM oci_create_task WHERE id=?`, id)
 	err := row.Scan(&t.ID, &t.TenantID, &t.Region, &t.Ocpus, &t.Memory, &t.Disk,
-		&t.Architecture, &t.Interval, &t.CreateNumbers, &t.RootPassword, &t.OperationSystem,
+		&t.Architecture, &t.RetryMin, &t.RetryMax, &t.CreateNumbers, &t.RootPassword, &t.OperationSystem,
 		&t.OSVersion, &t.SSHPublicKey, &t.InstanceName, &t.AvailabilityDomain, &t.CreateTime, &t.Paused)
 	if errors.Is(err, sql.ErrNoRows) {
 		return CreateTask{}, false, nil
@@ -349,18 +360,19 @@ func (s *Store) UpsertTask(t CreateTask) (CreateTask, error) {
 		t.CreateTime = nowStr()
 	}
 	_, err := s.db.Exec(`INSERT INTO oci_create_task
-		(id,user_id,oci_region,ocpus,memory,disk,architecture,interval,create_numbers,root_password,
+		(id,user_id,oci_region,ocpus,memory,disk,architecture,retry_min,retry_max,create_numbers,root_password,
 		 operation_system,os_version,ssh_public_key,instance_name,availability_domain,create_time,paused)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 			user_id=excluded.user_id, oci_region=excluded.oci_region, ocpus=excluded.ocpus,
 			memory=excluded.memory, disk=excluded.disk, architecture=excluded.architecture,
-			interval=excluded.interval, create_numbers=excluded.create_numbers,
+			retry_min=excluded.retry_min, retry_max=excluded.retry_max,
+			create_numbers=excluded.create_numbers,
 			root_password=excluded.root_password, operation_system=excluded.operation_system,
 			os_version=excluded.os_version, ssh_public_key=excluded.ssh_public_key,
 			instance_name=excluded.instance_name, availability_domain=excluded.availability_domain,
 			paused=excluded.paused`,
-		t.ID, t.TenantID, t.Region, t.Ocpus, t.Memory, t.Disk, t.Architecture, t.Interval,
+		t.ID, t.TenantID, t.Region, t.Ocpus, t.Memory, t.Disk, t.Architecture, t.RetryMin, t.RetryMax,
 		t.CreateNumbers, t.RootPassword, t.OperationSystem, t.OSVersion, t.SSHPublicKey,
 		t.InstanceName, t.AvailabilityDomain, t.CreateTime, t.Paused)
 	if err != nil {

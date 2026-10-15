@@ -71,6 +71,37 @@ func TestClassifyLaunchError(t *testing.T) {
 	}
 }
 
+// TestSleepRandomSecondUsesConfiguredInterval 锁定「尝试间隔」确实生效：
+// 传入的 min/max 必须体现在 "Sleep N Second..." 日志上（min==max 时固定 N 秒）。
+// 通过 Stopped 钩子让函数立即返回，避免测试真的等待。
+func TestSleepRandomSecondUsesConfiguredInterval(t *testing.T) {
+	cases := []struct {
+		name     string
+		min, max int32
+		want     string
+	}{
+		{"固定 30 秒", 30, 30, "Sleep 30 Second..."},
+		{"固定 60 秒", 60, 60, "Sleep 60 Second..."},
+		{"固定 1 秒", 1, 1, "Sleep 1 Second..."},
+		{"非法值退化为 1 秒", 0, 0, "Sleep 1 Second..."},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var got string
+			ac := &AccountCtx{
+				Logger:  func(format string, a ...interface{}) { got = fmt.Sprintf(format, a...) },
+				Stopped: func() bool { return true }, // 立即中止，不真正 sleep
+			}
+			if ac.sleepRandomSecond(c.min, c.max) {
+				t.Fatal("Stopped() 为真时应返回 false")
+			}
+			if strings.TrimSpace(got) != c.want {
+				t.Fatalf("sleepRandomSecond(%d,%d) 日志 = %q, want %q", c.min, c.max, got, c.want)
+			}
+		})
+	}
+}
+
 // TestEachADIndex 覆盖 H2 回归：each 模式下目标域按 pos/each 均匀分布，
 // 可重试失败时必须轮转到下一个域（原先 failTimes!=0 后永不切换 → retry=-1 死锁）。
 func TestEachADIndex(t *testing.T) {
@@ -111,6 +142,86 @@ func TestEachADIndex(t *testing.T) {
 			}
 			if c.adCount > 0 && (got < 0 || got >= c.adCount) {
 				t.Fatalf("下标 %d 越界 [0,%d)", got, c.adCount)
+			}
+		})
+	}
+}
+
+// TestRetryDelay 覆盖「重试间隔最小/最大」的随机取值与回退规则。
+func TestRetryDelay(t *testing.T) {
+	// 未配置（0/0）→ 回退到 fallback 区间
+	for i := 0; i < 100; i++ {
+		if got := RetryDelay(0, 0, 5, 9); got < 5 || got > 9 {
+			t.Fatalf("未配置应落在 fallback [5,9], got %d", got)
+		}
+	}
+	// 只给 min → 固定 min
+	if got := RetryDelay(7, 0, 1, 1); got != 7 {
+		t.Fatalf("只给 min 应固定为 7, got %d", got)
+	}
+	// 只给 max → 落在 [fallbackMin, max]
+	for i := 0; i < 100; i++ {
+		if got := RetryDelay(0, 12, 1, 1); got < 1 || got > 12 {
+			t.Fatalf("只给 max 应落在 [1,12], got %d", got)
+		}
+	}
+	// 正常区间：随机且不越界
+	seen := map[int32]bool{}
+	for i := 0; i < 300; i++ {
+		got := RetryDelay(3, 8, 0, 0)
+		if got < 3 || got > 8 {
+			t.Fatalf("应落在 [3,8], got %d", got)
+		}
+		seen[got] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("区间内应产生随机值，实际只出现 %v", seen)
+	}
+	// 全部无效 → 1 秒
+	if got := RetryDelay(0, 0, 0, 0); got != 1 {
+		t.Fatalf("全部无效应为 1, got %d", got)
+	}
+}
+
+// TestApplyBackoff 覆盖 429 指数退避：2 的幂放大并封顶。
+func TestApplyBackoff(t *testing.T) {
+	cases := []struct {
+		base, streak, want int32
+	}{
+		{5, 0, 5},    // 非限流
+		{5, 1, 5},    // 首次限流不放大
+		{5, 2, 10},   // 2^1
+		{5, 3, 20},   // 2^2
+		{5, 4, 40},   // 2^3
+		{10, 6, 180}, // 10<<5=320 → 封顶 180
+		{0, 5, 0},    // 基础为 0 保持 0
+	}
+	for _, c := range cases {
+		if got := applyBackoff(c.base, c.streak); got != c.want {
+			t.Fatalf("applyBackoff(%d,%d)=%d, want %d", c.base, c.streak, got, c.want)
+		}
+	}
+}
+
+// TestIsRateLimitError 覆盖限流识别（429 / TooManyRequests）。
+func TestIsRateLimitError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"429", fakeServiceError{429, "TooManyRequests", "slow down"}, true},
+		{"code 为 TooManyRequests", fakeServiceError{400, "TooManyRequests", "x"}, true},
+		{"包装后的 429 仍可识别", fmt.Errorf("调用失败: %w", fakeServiceError{429, "TooManyRequests", "slow down"}), true},
+		{"文案含 Too many requests", errors.New("Too many requests for the user"), true},
+		{"普通 500 不算限流", fakeServiceError{500, "InternalError", "x"}, false},
+		{"网络错误不算限流", errors.New("dial tcp: connection refused"), false},
+		{"nil", nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isRateLimitError(c.err); got != c.want {
+				t.Fatalf("isRateLimitError=%v, want %v", got, c.want)
 			}
 		})
 	}

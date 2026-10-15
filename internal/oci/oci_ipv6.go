@@ -55,7 +55,7 @@ func (ac *AccountCtx) AttachIpv6(instanceID string) (string, error) {
 	}
 
 	// 2) 子网添加 IPv6 CIDR
-	subnets, err := ac.listSubnetsOfVcn(*vcn.Id)
+	subnets, err := ac.listSubnetsOfVcn(vcnCompartment(vcn, ac.Oracle.Tenancy), *vcn.Id)
 	if err != nil {
 		return "", fmt.Errorf("获取子网失败: %w", err)
 	}

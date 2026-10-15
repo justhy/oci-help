@@ -46,8 +46,9 @@ func handleTaskSave(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "创建数量必须大于 0")
 		return
 	}
-	if req.Interval <= 0 {
-		req.Interval = 60
+	if req.RetryMin < 0 || req.RetryMax < 0 {
+		writeErr(w, http.StatusBadRequest, "重试间隔不能为负数")
+		return
 	}
 	if req.Disk <= 0 {
 		req.Disk = 47
@@ -63,7 +64,8 @@ func handleTaskSave(w http.ResponseWriter, r *http.Request) {
 		Ocpus:              req.Ocpus,
 		Memory:             req.Memory,
 		Disk:               req.Disk,
-		Interval:           req.Interval,
+		RetryMin:           req.RetryMin,
+		RetryMax:           req.RetryMax,
 		CreateNumbers:      req.CreateNumbers,
 		RootPassword:       req.RootPassword,
 		OperationSystem:    req.OperationSystem,
