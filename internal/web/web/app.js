@@ -543,6 +543,7 @@ async function showInstanceDetail(id) {
         '<div class="k">状态</div><div><span class="state ' + stateClass(d.stateRaw) + '">' + esc(d.state) + '</span></div>' +
         '<div class="k">公共IP</div><div class="mono">' + (esc((d.publicIps || []).join(', ')) || '-') + '</div>' +
         '<div class="k">私有IP</div><div class="mono">' + (esc((d.privateIps || []).join(', ')) || '-') + '</div>' +
+        '<div class="k">IPv6 地址</div><div class="mono">' + (esc((d.ipv6Addresses || []).join(', ')) || '-') + '</div>' +
         '<div class="k">可用性域</div><div>' + esc(d.availabilityDomain) + '</div>' +
         '<div class="k">配置</div><div class="mono">' + esc(d.shape) + '</div>' +
         '<div class="k">OCPU / 内存</div><div class="mono">' + d.ocpus + ' C / ' + d.memoryInGBs + ' GB</div>' +

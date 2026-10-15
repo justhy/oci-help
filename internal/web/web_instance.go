@@ -91,6 +91,25 @@ func handleInstances(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"instances": out})
 }
 
+// collectInstanceIps 汇总实例各 VNIC 上的公网 IP、私网 IP 与 IPv6 地址（跳过空值）。
+// IPv6 直接取 core.Vnic.Ipv6Addresses —— GetVnic 已经返回该字段，无需再调 ListIpv6s。
+func collectInstanceIps(vnics []core.Vnic) (publicIps, privateIps, ipv6Addrs []string) {
+	for _, v := range vnics {
+		if v.PublicIp != nil && *v.PublicIp != "" {
+			publicIps = append(publicIps, *v.PublicIp)
+		}
+		if v.PrivateIp != nil && *v.PrivateIp != "" {
+			privateIps = append(privateIps, *v.PrivateIp)
+		}
+		for _, a := range v.Ipv6Addresses {
+			if a != "" {
+				ipv6Addrs = append(ipv6Addrs, a)
+			}
+		}
+	}
+	return
+}
+
 func handleInstance(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -116,15 +135,7 @@ func handleInstance(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "获取实例VNIC失败: "+err.Error())
 		return
 	}
-	var publicIps, privateIps []string
-	for _, v := range vnics {
-		if v.PublicIp != nil && *v.PublicIp != "" {
-			publicIps = append(publicIps, *v.PublicIp)
-		}
-		if v.PrivateIp != nil && *v.PrivateIp != "" {
-			privateIps = append(privateIps, *v.PrivateIp)
-		}
-	}
+	publicIps, privateIps, ipv6Addrs := collectInstanceIps(vnics)
 
 	detail := instanceDetailView{
 		instanceView: instanceView{
@@ -138,7 +149,8 @@ func handleInstance(w http.ResponseWriter, r *http.Request) {
 			AvailabilityDomain: oci.S(ins.AvailabilityDomain),
 			PublicIps:          publicIps,
 		},
-		PrivateIps: privateIps,
+		PrivateIps:    privateIps,
+		Ipv6Addresses: ipv6Addrs,
 	}
 	detail.NetworkingBandwidthInGbps = oci.ShapeBandwidth(ins.ShapeConfig)
 	if ins.AgentConfig != nil {

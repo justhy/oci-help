@@ -59,6 +59,7 @@ type instanceDetailView struct {
 	instanceView
 	NetworkingBandwidthInGbps float32      `json:"networkingBandwidthInGbps"`
 	PrivateIps                []string     `json:"privateIps"`
+	Ipv6Addresses             []string     `json:"ipv6Addresses"`
 	IsMonitoringDisabled      bool         `json:"isMonitoringDisabled"`
 	IsManagementDisabled      bool         `json:"isManagementDisabled"`
 	AreAllPluginsDisabled     bool         `json:"areAllPluginsDisabled"`
