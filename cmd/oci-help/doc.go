@@ -99,8 +99,13 @@
 //
 // # 测试
 //
-//	internal/store/store_test.go         持久化层单测
-//	internal/task/task_test.go           抢机任务配置转换单测
-//	internal/web/web_smoke_test.go       HTTP 接口与规则构造器 smoke 测试
-//	.test/                               E2E 夹具与脚本（已被 .gitignore 忽略，不参与 go test）
+// 单测与源码同目录（Go 约定，文件以 _test.go 结尾）：
+//
+//	internal/store/store_test.go          持久化层单测
+//	internal/task/task_test.go            抢机任务配置转换单测
+//	internal/updater/update_test.go       版本比较单测
+//	internal/oci/oci_launch_test.go       抢机重试决策单测
+//	internal/web/web_smoke_test.go        HTTP 接口与规则构造器 smoke 测试
+//
+// 运行：go test ./...。.test/ 为本地 E2E 夹具与脚本（已被 .gitignore 忽略，不入库）。
 package main
